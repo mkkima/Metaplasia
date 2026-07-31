@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>Metaplasia</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <svg class="svg-defs" aria-hidden="true">
+      <symbol id="i-overview" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20H4Z"/><path d="M9 20v-6h6v6"/></symbol>
+      <symbol id="i-custom" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2m4 0h10M14 4v6M6 14v6"/></symbol>
+      <symbol id="i-taskbar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15h18M7 17h.01M10 17h.01"/></symbol>
+      <symbol id="i-start" viewBox="0 0 24 24"><path d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z"/></symbol>
+      <symbol id="i-explorer" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3Z"/><path d="M3 7V5h7l2 2"/></symbol>
+      <symbol id="i-diagnostics" viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
+      <symbol id="i-about" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18 10a7 7 0 0 0-12-3L4 12m2 2a7 7 0 0 0 12 3l2-5"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 20 6v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6Z"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    </svg>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">M</div>
+          <div>
+            <strong>Metaplasia</strong>
+            <span>Windows shell laboratory</span>
+          </div>
+        </div>
+        <div class="topbar-context">
+          <span class="context-label">Current view</span>
+          <strong id="current-view">Overview</strong>
+        </div>
+        <div class="connection-chip is-waiting" id="connection-chip" title="Connecting to the local host">
+          <span class="status-bar" aria-hidden="true"></span>
+          <span id="connection-text">Connecting to host</span>
+        </div>
+      </header>
+
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="nav-section">
+          <span class="nav-caption">Workspace</span>
+          <button class="nav-item is-active" type="button" data-route="overview">
+            <svg><use href="#i-overview"></use></svg><span>Overview</span>
+          </button>
+          <button class="nav-item" type="button" data-route="customizations">
+            <svg><use href="#i-custom"></use></svg><span>Customizations</span>
+          </button>
+        </div>
+        <div class="nav-section">
+          <span class="nav-caption">Shell targets</span>
+          <button class="nav-item" type="button" data-route="taskbar">
+            <svg><use href="#i-taskbar"></use></svg><span>Taskbar</span>
+          </button>
+          <button class="nav-item" type="button" data-route="start">
+            <svg><use href="#i-start"></use></svg><span>Start menu</span>
+          </button>
+          <button class="nav-item" type="button" data-route="explorer">
+            <svg><use href="#i-explorer"></use></svg><span>File Explorer</span>
+          </button>
+        </div>
+        <div class="nav-section nav-bottom">
+          <button class="nav-item" type="button" data-route="diagnostics">
+            <svg><use href="#i-diagnostics"></use></svg><span>Diagnostics</span>
+          </button>
+          <button class="nav-item" type="button" data-route="about">
+            <svg><use href="#i-about"></use></svg><span>About</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="content" id="content">
+        <section class="page is-active" data-page="overview" aria-labelledby="overview-title">
+          <div class="page-heading">
+            <div><span class="eyebrow">Control center</span><h1 id="overview-title">Windows shell, under your control.</h1><p>Direct local control over the Taskbar, Start menu, and File Explorer.</p></div>
+          </div>
+          <div class="hero-grid">
+            <article class="hero-card">
+              <div class="hero-copy"><span class="section-kicker">Runtime status</span><h2 id="overview-active-count">Connecting…</h2><p id="overview-summary">Waiting for the native host.</p></div>
+              <div class="hero-meter" aria-hidden="true"><span data-meter="taskbar"></span><span data-meter="start"></span><span data-meter="explorer"></span></div>
+            </article>
+            <article class="security-card">
+              <svg><use href="#i-shield"></use></svg>
+              <div><strong>Local by design</strong><p>Commands stay inside your Windows session over a per-user named pipe.</p></div>
+            </article>
+          </div>
+          <div class="section-heading"><div><h2>Shell targets</h2><p>Open a surface to configure it.</p></div></div>
+          <div class="overview-targets" id="overview-targets"></div>
+        </section>
+
+        <section class="page" data-page="customizations" aria-labelledby="customizations-title">
+          <div class="page-heading"><div><span class="eyebrow">Customizations</span><h1 id="customizations-title">Shell targets</h1><p>Every change is applied locally and can be reversed.</p></div></div>
+          <div class="target-list" id="target-list"></div>
+          <article class="local-note"><span class="status-bar is-active"></span><div><strong>No network runtime</strong><p>The UI is bundled into the executable. No local server and no remote service are used.</p></div></article>
+        </section>
+
+        <section class="page" data-page="taskbar" aria-labelledby="taskbar-title">
+          <div class="target-page-heading">
+            <div class="target-heading-icon"><svg><use href="#i-taskbar"></use></svg></div>
+            <div><span class="eyebrow">Shell target</span><h1 id="taskbar-title">Taskbar</h1><p>Control the native Windows 11 taskbar surface.</p></div>
+            <div class="target-heading-state"><span class="state-label" data-state-label="taskbar">Unknown</span><label class="switch"><input type="checkbox" data-target-toggle="taskbar" aria-label="Enable Taskbar customization"><span></span></label></div>
+          </div>
+          <section class="settings-section">
+            <div class="settings-title"><h2>Appearance</h2><p>Core visual properties of the Windows 11 Taskbar.</p></div>
+            <div class="setting-row"><div><strong>Taskbar color</strong><p>Replace the native Taskbar background with a solid color.</p></div><div class="color-control" data-color-control="taskbar"><input type="color" data-color-picker="taskbar" aria-label="Taskbar color"><input type="text" data-color-hex="taskbar" maxlength="7" inputmode="text" autocomplete="off" spellcheck="false" aria-label="Taskbar color hexadecimal value"><button class="primary-button" type="button" data-color-apply="taskbar">Apply</button><label class="switch"><input type="checkbox" data-custom-toggle="taskbarBackgroundColorEnabled" aria-label="Enable custom Taskbar color"><span></span></label></div></div>
+            <div class="setting-row"><div><strong>Capsule taskbar</strong><p>Center the Taskbar in a responsive 1420 px dark capsule with floating spacing, rounded corners, and a subtle outline.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="taskbarCapsuleEnabled" aria-label="Enable capsule Taskbar"><span></span></label></div>
+            <div class="setting-row"><div><strong>Taskbar opacity</strong><p>Set the background opacity from 10% to 100%.</p></div><div class="range-control"><button type="button" data-range-step="taskbar-opacity" data-delta="-5" aria-label="Decrease opacity"><svg><use href="#i-minus"></use></svg></button><input id="taskbar-opacity" type="range" min="10" max="100" step="1"><output for="taskbar-opacity">100%</output><button type="button" data-range-step="taskbar-opacity" data-delta="5" aria-label="Increase opacity"><svg><use href="#i-plus"></use></svg></button></div></div>
+          </section>
+          <section class="settings-section">
+            <div class="settings-title"><h2>Clock</h2><p>Text displayed before the system clock.</p></div>
+            <div class="setting-row"><div><strong>Clock prefix</strong><p>Leave empty to remove the prefix. Maximum 15 characters.</p></div><form class="text-control" data-text-form="taskbarClockPrefix"><input id="clock-prefix" type="text" maxlength="15" autocomplete="off" spellcheck="false" aria-label="Taskbar clock prefix"><button class="primary-button" type="submit">Apply</button></form></div>
+          </section>
+          <section class="settings-section">
+            <div class="settings-title"><h2>System tray</h2><p>Choose which native Taskbar affordances stay visible.</p></div>
+            <div class="setting-row"><div><strong>Hide notification center</strong><p>Remove the notification center entry point.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="taskbarHideNotificationCenter"><span></span></label></div>
+            <div class="setting-row"><div><strong>Hide control center</strong><p>Remove the quick settings and control center entry point.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="taskbarHideControlCenter"><span></span></label></div>
+            <div class="setting-row"><div><strong>Hide Show desktop</strong><p>Remove the thin Show desktop area at the taskbar edge.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="taskbarHideShowDesktop"><span></span></label></div>
+          </section>
+        </section>
+
+        <section class="page" data-page="start" aria-labelledby="start-title">
+          <div class="target-page-heading">
+            <div class="target-heading-icon"><svg><use href="#i-start"></use></svg></div>
+            <div><span class="eyebrow">Shell target</span><h1 id="start-title">Start menu</h1><p>Reshape the Windows 11 Start experience.</p></div>
+            <div class="target-heading-state"><span class="state-label" data-state-label="start">Unknown</span><label class="switch"><input type="checkbox" data-target-toggle="start" aria-label="Enable Start menu customization"><span></span></label></div>
+          </div>
+          <section class="settings-section">
+            <div class="settings-title"><h2>Appearance</h2><p>Visual properties of the native Start menu.</p></div>
+            <div class="setting-row"><div><strong>Start menu color</strong><p>Replace the native acrylic surface with a solid color used only by Start.</p></div><div class="color-control" data-color-control="start"><input type="color" data-color-picker="start" aria-label="Start menu color"><input type="text" data-color-hex="start" maxlength="7" inputmode="text" autocomplete="off" spellcheck="false" aria-label="Start menu color hexadecimal value"><button class="primary-button" type="button" data-color-apply="start">Apply</button><label class="switch"><input type="checkbox" data-custom-toggle="startBackgroundColorEnabled" aria-label="Enable custom Start menu color"><span></span></label></div></div>
+            <div class="setting-row"><div><strong>Start menu opacity</strong><p>Set the surface opacity from 10% to 100%.</p></div><div class="range-control"><button type="button" data-range-step="start-opacity" data-delta="-5" aria-label="Decrease opacity"><svg><use href="#i-minus"></use></svg></button><input id="start-opacity" type="range" min="10" max="100" step="1"><output for="start-opacity">100%</output><button type="button" data-range-step="start-opacity" data-delta="5" aria-label="Increase opacity"><svg><use href="#i-plus"></use></svg></button></div></div>
+          </section>
+          <section class="settings-section">
+            <div class="settings-title"><h2>Content</h2><p>Choose which sections remain in the Start layout.</p></div>
+            <div class="setting-row"><div><strong>Hide Recommended</strong><p>Hide the Recommended section while preserving pinned applications.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="startHideRecommended"><span></span></label></div>
+            <div class="setting-row"><div><strong>Hide All apps content</strong><p id="start-all-apps-detail">Remove every app entry from the All section and leave that area empty. Requires administrator approval.</p></div><label class="switch"><input type="checkbox" data-policy-toggle="startHideAllApps" aria-label="Hide All apps content" aria-describedby="start-all-apps-detail"><span></span></label></div>
+          </section>
+          <article class="info-panel"><span class="status-bar"></span><div><strong>XAML-aware customization</strong><p>The native agent observes the current Start menu tree instead of relying on a static screenshot or overlay.</p></div></article>
+        </section>
+
+        <section class="page" data-page="explorer" aria-labelledby="explorer-title">
+          <div class="target-page-heading">
+            <div class="target-heading-icon"><svg><use href="#i-explorer"></use></svg></div>
+            <div><span class="eyebrow">Shell target</span><h1 id="explorer-title">File Explorer</h1><p>Apply ownership-aware changes to Explorer folder windows.</p></div>
+            <div class="target-heading-state"><span class="state-label" data-state-label="explorer">Unknown</span><label class="switch"><input type="checkbox" data-target-toggle="explorer" aria-label="Enable File Explorer customization"><span></span></label></div>
+          </div>
+          <section class="settings-section">
+            <div class="settings-title"><h2>Appearance</h2><p>Color applied only to File Explorer folder windows.</p></div>
+            <div class="setting-row"><div><strong>File Explorer color</strong><p>Color the complete Explorer surface independently from Start and Taskbar.</p></div><div class="color-control" data-color-control="explorer"><input type="color" data-color-picker="explorer" aria-label="File Explorer color"><input type="text" data-color-hex="explorer" maxlength="7" inputmode="text" autocomplete="off" spellcheck="false" aria-label="File Explorer color hexadecimal value"><button class="primary-button" type="button" data-color-apply="explorer">Apply</button><label class="switch"><input type="checkbox" data-custom-toggle="explorerBackgroundColorEnabled" aria-label="Enable custom File Explorer color"><span></span></label></div></div>
+            <div class="setting-row"><div><strong>Directory transition</strong><p>Choose how the freshly rendered directory is revealed. Requires the custom Explorer color.</p></div><div class="animation-picker" role="group" aria-label="File Explorer directory transition"><button type="button" data-transition-animation="0" aria-pressed="false">None</button><button type="button" data-transition-animation="1" aria-pressed="true">Fade</button><button type="button" data-transition-animation="2" aria-pressed="false">Slide + Fade</button><button type="button" data-transition-animation="3" aria-pressed="false">Scale + Fade</button></div></div>
+            <div class="setting-row"><div><strong>Custom scrollbars</strong><p>Replace the navigation-tree and file-area scrollbars with black tracks and white responsive thumbs.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="explorerCustomScrollbarEnabled" aria-label="Enable custom File Explorer scrollbars"><span></span></label></div>
+          </section>
+          <section class="settings-section">
+            <div class="settings-title"><h2>Window identity</h2><p>Customize native File Explorer window titles.</p></div>
+            <div class="setting-row"><div><strong>Title prefix</strong><p>Displayed before the folder title. Maximum 31 characters.</p></div><form class="text-control" data-text-form="explorerTitlePrefix"><input id="explorer-prefix" type="text" maxlength="31" autocomplete="off" spellcheck="false" aria-label="File Explorer title prefix"><button class="primary-button" type="submit">Apply</button></form></div>
+          </section>
+          <article class="info-panel"><span class="status-bar"></span><div><strong>Scoped to Explorer</strong><p>Only windows owned by the supported Explorer process are modified. Other application title bars are untouched.</p></div></article>
+        </section>
+
+        <section class="page" data-page="diagnostics" aria-labelledby="diagnostics-title">
+          <div class="page-heading page-heading-actions"><div><span class="eyebrow">Runtime</span><h1 id="diagnostics-title">Diagnostics</h1><p>Live process, injection, and XAML observation state.</p></div><button class="secondary-button" id="refresh-diagnostics" type="button"><svg><use href="#i-refresh"></use></svg>Refresh XAML data</button></div>
+          <div class="diagnostic-grid" id="diagnostic-targets"></div>
+          <section class="settings-section diagnostics-table-section">
+            <div class="settings-title"><h2>Start menu XAML observations</h2><p id="xaml-summary">Refresh to inspect the current native tree.</p></div>
+            <div class="table-wrap"><table><thead><tr><th>Runtime type</th><th>Observations</th></tr></thead><tbody id="xaml-types"><tr><td colspan="2" class="empty-cell">No diagnostic snapshot loaded.</td></tr></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="page" data-page="about" aria-labelledby="about-title">
+          <div class="page-heading"><div><span class="eyebrow">About</span><h1 id="about-title">Metaplasia</h1><p>A native Windows 11 shell customization engine with a Tauri control center.</p></div></div>
+          <div class="about-grid"><article class="about-card"><span>Application</span><strong>Metaplasia 0.1.0</strong><p>Taskbar, Start menu, and File Explorer customization from one local control surface.</p></article><article class="about-card"><span>Interface</span><strong>Tauri v2 + WebView2</strong><p>Bundled static assets, native window management, and hardware-accelerated rendering.</p></article><article class="about-card"><span>Transport</span><strong>Per-user named pipe</strong><p>Versioned binary IPC restricted to your current Windows user and session.</p></article></div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

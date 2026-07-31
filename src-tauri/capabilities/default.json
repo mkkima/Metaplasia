@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions required by the local Metaplasia control center.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
+
