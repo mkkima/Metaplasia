@@ -14,6 +14,12 @@ path = "src/main.rs"
 tauri-build = "=2.6.3"
 
 [dependencies]
+base64 = "0.22.1"
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["fast", "std", "zeroize"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
+semver = "1.0.28"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.9"
 tauri = { version = "=2.11.5" }
-
+zip = { version = "6.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }

@@ -105,7 +105,9 @@ cmake --build --preset windows-msvc-debug
 All executables and the agent DLL are placed in `build/<configuration>/bin`.
 Keep them together: the host resolves both the agent and watchdog relative to
 its own executable and refuses to activate without a completed watchdog
-readiness handshake.
+readiness handshake. Native C++ and Rust/Tauri builds statically link their
+Microsoft C/C++ runtime dependency, so the five-file application stays portable
+and does not require a separately installed Visual C++ Redistributable.
 
 ## Run
 
@@ -147,12 +149,15 @@ Valid target names are `taskbar`, `file-explorer`, and `start-menu`. The
 atomically in `%LOCALAPPDATA%\Metaplasia\settings.conf`; a missing or malformed
 file starts in fail-safe mode with all features disabled.
 
-The runtime is entirely local. It contains no updater, HTTP client, telemetry,
-cloud service, or network listener; control traffic uses a per-session local
-named pipe. The control center loads static HTML, CSS, and JavaScript bundled
-inside `metaplasia.exe`; it does not run a local web server. CMake may fetch the
-pinned MinHook source and Cargo may download dependencies fixed by
-`src-tauri/Cargo.lock` when they are not already present in a dependency cache.
+Shell customization and control traffic remain entirely local over a
+per-session named pipe. The only production network client is the portable
+updater: when automatic updates are enabled or the user clicks **Check now**, it
+uses outbound HTTPS solely for signed assets from this repository's GitHub
+Releases. There is no telemetry, cloud service, network listener, local web
+server, installer, or background update service. See [Portable updates](docs/UPDATES.md).
+The control center loads static HTML, CSS, and JavaScript bundled inside
+`metaplasia.exe`. CMake may fetch the pinned MinHook source and Cargo may
+download dependencies fixed by `src-tauri/Cargo.lock` during a developer build.
 
 Unsigned binaries are accepted only by the Debug configuration, and only when
 the complete checked component set is unsigned. An unsigned Release host exits

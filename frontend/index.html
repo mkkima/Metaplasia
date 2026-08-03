@@ -15,6 +15,13 @@
       <symbol id="i-taskbar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15h18M7 17h.01M10 17h.01"/></symbol>
       <symbol id="i-start" viewBox="0 0 24 24"><path d="M4 4h7v7H4zm9 0h7v7h-7zM4 13h7v7H4zm9 0h7v7h-7z"/></symbol>
       <symbol id="i-explorer" viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3Z"/><path d="M3 7V5h7l2 2"/></symbol>
+      <symbol id="i-notifications-audio" viewBox="0 0 24 24"><path d="M15 17H5l1.5-2V10a5.5 5.5 0 0 1 9-4.2"/><path d="M9 20h2M18 9v6M15.5 11v2M20.5 7v10"/></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4Z"/><path d="M15 9.5a4 4 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/></symbol>
+      <symbol id="i-device" viewBox="0 0 24 24"><path d="M6 15v-3a6 6 0 0 1 12 0v3"/><path d="M6 14H4v5h4v-5Zm12 0h2v5h-4v-5Z"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 6v12M16 6v12"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
       <symbol id="i-diagnostics" viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
       <symbol id="i-about" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
@@ -64,6 +71,12 @@
           </button>
           <button class="nav-item" type="button" data-route="explorer">
             <svg><use href="#i-explorer"></use></svg><span>File Explorer</span>
+          </button>
+        </div>
+        <div class="nav-section">
+          <span class="nav-caption">UI concepts</span>
+          <button class="nav-item" type="button" data-route="notifications-audio">
+            <svg><use href="#i-notifications-audio"></use></svg><span>Notifications &amp; audio</span>
           </button>
         </div>
         <div class="nav-section nav-bottom">
@@ -137,9 +150,13 @@
             <div class="setting-row"><div><strong>Start menu opacity</strong><p>Set the surface opacity from 10% to 100%.</p></div><div class="range-control"><button type="button" data-range-step="start-opacity" data-delta="-5" aria-label="Decrease opacity"><svg><use href="#i-minus"></use></svg></button><input id="start-opacity" type="range" min="10" max="100" step="1"><output for="start-opacity">100%</output><button type="button" data-range-step="start-opacity" data-delta="5" aria-label="Increase opacity"><svg><use href="#i-plus"></use></svg></button></div></div>
           </section>
           <section class="settings-section">
+            <div class="settings-title"><h2>Layout</h2><p>Arrange native Start content in separate floating columns.</p></div>
+            <div class="setting-row"><div><strong>Three-panel Start</strong><p>Place All apps, Pinned, and Recommended in three rounded panels like the reference layout. Existing content visibility settings still apply.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="startThreePanelLayoutEnabled" aria-label="Enable three-panel Start menu layout"><span></span></label></div>
+          </section>
+          <section class="settings-section">
             <div class="settings-title"><h2>Content</h2><p>Choose which sections remain in the Start layout.</p></div>
             <div class="setting-row"><div><strong>Hide Recommended</strong><p>Hide the Recommended section while preserving pinned applications.</p></div><label class="switch"><input type="checkbox" data-custom-toggle="startHideRecommended"><span></span></label></div>
-            <div class="setting-row"><div><strong>Hide All apps content</strong><p id="start-all-apps-detail">Remove every app entry from the All section and leave that area empty. Requires administrator approval.</p></div><label class="switch"><input type="checkbox" data-policy-toggle="startHideAllApps" aria-label="Hide All apps content" aria-describedby="start-all-apps-detail"><span></span></label></div>
+            <div class="setting-row"><div><strong>Hide All apps content</strong><p id="start-all-apps-detail">Leave the All apps area empty. Three-panel mode applies this locally; the native layout uses the Windows policy.</p></div><label class="switch"><input type="checkbox" data-policy-toggle="startHideAllApps" aria-label="Hide All apps content" aria-describedby="start-all-apps-detail"><span></span></label></div>
           </section>
           <article class="info-panel"><span class="status-bar"></span><div><strong>XAML-aware customization</strong><p>The native agent observes the current Start menu tree instead of relying on a static screenshot or overlay.</p></div></article>
         </section>
@@ -163,6 +180,126 @@
           <article class="info-panel"><span class="status-bar"></span><div><strong>Scoped to Explorer</strong><p>Only windows owned by the supported Explorer process are modified. Other application title bars are untouched.</p></div></article>
         </section>
 
+        <section class="page" data-page="notifications-audio" aria-labelledby="notifications-audio-title">
+          <div class="target-page-heading">
+            <div class="target-heading-icon"><svg><use href="#i-notifications-audio"></use></svg></div>
+            <div><span class="eyebrow">Interface concept</span><h1 id="notifications-audio-title">Notifications &amp; audio</h1><p>Prototype the Windows notification and volume surfaces before native integration.</p></div>
+            <span class="demo-badge"><span aria-hidden="true"></span>Preview only</span>
+          </div>
+
+          <article class="demo-disclaimer">
+            <span class="demo-disclaimer-mark" aria-hidden="true">D</span>
+            <div><strong>UI demo — Windows is not modified</strong><p>These controls update only the preview below. Demo preferences are stored locally in this WebView and never sent to the native host.</p></div>
+          </article>
+
+          <div class="demo-layout">
+            <div class="demo-settings-column">
+              <section class="settings-section">
+                <div class="settings-title"><h2>Windows notifications</h2><p>Shape the placement and density of notification cards.</p></div>
+                <div class="setting-row">
+                  <div><strong>Placement</strong><p>Choose which edge anchors new notification cards.</p></div>
+                  <div class="demo-choice" role="group" aria-label="Notification placement">
+                    <button type="button" data-demo-choice="notificationPosition" data-demo-value="top">Top right</button>
+                    <button type="button" data-demo-choice="notificationPosition" data-demo-value="bottom">Bottom right</button>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div><strong>Card density</strong><p>Control padding and information density without shrinking text.</p></div>
+                  <div class="demo-choice" role="group" aria-label="Notification card density">
+                    <button type="button" data-demo-choice="notificationDensity" data-demo-value="compact">Compact</button>
+                    <button type="button" data-demo-choice="notificationDensity" data-demo-value="comfortable">Comfortable</button>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div><strong>Action buttons</strong><p>Show contextual actions at the bottom of supported notifications.</p></div>
+                  <label class="switch"><input type="checkbox" data-demo-toggle="notificationActions" aria-label="Show notification action buttons"><span></span></label>
+                </div>
+                <div class="setting-row">
+                  <div><strong>Display duration</strong><p>Preview how long a transient notification remains visible.</p></div>
+                  <div class="range-control demo-range-control">
+                    <button type="button" data-demo-range-step="notification-duration" data-delta="-1" aria-label="Decrease notification duration"><svg><use href="#i-minus"></use></svg></button>
+                    <input id="notification-duration" type="range" min="3" max="15" step="1" data-demo-range="notificationDuration" aria-label="Notification display duration">
+                    <output for="notification-duration">6 sec</output>
+                    <button type="button" data-demo-range-step="notification-duration" data-delta="1" aria-label="Increase notification duration"><svg><use href="#i-plus"></use></svg></button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-section">
+                <div class="settings-title"><h2>Volume flyout</h2><p>Prototype a compact or media-aware sound panel.</p></div>
+                <div class="setting-row">
+                  <div><strong>Panel layout</strong><p>Keep volume controls minimal or include the current media session.</p></div>
+                  <div class="demo-choice" role="group" aria-label="Volume panel layout">
+                    <button type="button" data-demo-choice="audioLayout" data-demo-value="compact">Compact</button>
+                    <button type="button" data-demo-choice="audioLayout" data-demo-value="expanded">Expanded</button>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div><strong>Output device</strong><p>Expose the active audio device directly in the flyout.</p></div>
+                  <label class="switch"><input type="checkbox" data-demo-toggle="showOutputDevice" aria-label="Show output device in volume panel"><span></span></label>
+                </div>
+                <div class="setting-row">
+                  <div><strong>Media controls</strong><p>Show playback information when an application owns a media session.</p></div>
+                  <label class="switch"><input type="checkbox" data-demo-toggle="showMediaControls" aria-label="Show media controls in volume panel"><span></span></label>
+                </div>
+                <div class="setting-row">
+                  <div><strong>Preview volume</strong><p>Adjust the demo volume; this does not change system audio.</p></div>
+                  <div class="range-control demo-range-control">
+                    <button type="button" data-demo-volume-mute aria-label="Mute preview volume"><svg><use href="#i-volume"></use></svg></button>
+                    <input id="demo-volume" type="range" min="0" max="100" step="1" data-demo-volume aria-label="Preview volume">
+                    <output for="demo-volume">68%</output>
+                    <button type="button" data-demo-range-step="demo-volume" data-delta="5" aria-label="Increase preview volume"><svg><use href="#i-plus"></use></svg></button>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <aside class="demo-preview" aria-label="Notifications and audio preview">
+              <div class="demo-preview-header">
+                <div><span>Live preview</span><strong>Windows surfaces</strong></div>
+                <span class="demo-live-indicator"><span aria-hidden="true"></span>Local</span>
+              </div>
+              <div class="demo-desktop" data-demo-desktop>
+                <div class="demo-desktop-label"><span>METAPLASIA</span><strong>Interface sandbox</strong></div>
+
+                <article class="notification-preview" data-notification-preview>
+                  <div class="notification-preview-header">
+                    <span class="preview-app-icon"><svg><use href="#i-bell"></use></svg></span>
+                    <div><strong>Metaplasia</strong><span>now</span></div>
+                    <button type="button" data-demo-dismiss-notification aria-label="Dismiss demo notification"><svg><use href="#i-close"></use></svg></button>
+                  </div>
+                  <div class="notification-preview-copy"><strong>Shell customization ready</strong><p>Your interface concept has been saved locally and is ready to preview.</p></div>
+                  <div class="notification-preview-actions" data-notification-actions><button type="button" data-demo-notification-open>Open preview</button><button type="button" data-demo-dismiss-notification>Dismiss</button></div>
+                  <span class="notification-duration-label" data-notification-duration-label>6 second preview</span>
+                </article>
+
+                <article class="audio-preview" data-audio-preview>
+                  <div class="audio-preview-main">
+                    <button class="audio-mute-button" type="button" data-demo-volume-mute aria-label="Mute preview volume"><svg><use href="#i-volume"></use></svg></button>
+                    <input type="range" min="0" max="100" step="1" data-demo-volume aria-label="Preview volume in flyout">
+                    <output data-demo-volume-output>68</output>
+                  </div>
+                  <button class="audio-device-row" type="button" data-audio-device data-demo-device>
+                    <span><svg><use href="#i-device"></use></svg></span>
+                    <span><strong>Headphones</strong><small>USB Audio Device</small></span>
+                    <svg><use href="#i-chevron"></use></svg>
+                  </button>
+                  <div class="audio-media-row" data-audio-media>
+                    <span class="media-art" aria-hidden="true">M</span>
+                    <span><strong>Midnight Drive</strong><small>Metaplasia Radio</small></span>
+                    <button type="button" data-demo-media-toggle aria-label="Play demo media"><svg><use href="#i-play"></use></svg></button>
+                  </div>
+                </article>
+              </div>
+              <div class="demo-preview-actions">
+                <button class="secondary-button" type="button" data-demo-show-notification><svg><use href="#i-bell"></use></svg>Show notification</button>
+                <button class="secondary-button" type="button" data-demo-show-audio><svg><use href="#i-volume"></use></svg>Show volume</button>
+                <button class="demo-reset-button" type="button" data-demo-reset>Reset</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
         <section class="page" data-page="diagnostics" aria-labelledby="diagnostics-title">
           <div class="page-heading page-heading-actions"><div><span class="eyebrow">Runtime</span><h1 id="diagnostics-title">Diagnostics</h1><p>Live process, injection, and XAML observation state.</p></div><button class="secondary-button" id="refresh-diagnostics" type="button"><svg><use href="#i-refresh"></use></svg>Refresh XAML data</button></div>
           <div class="diagnostic-grid" id="diagnostic-targets"></div>
@@ -174,11 +311,36 @@
 
         <section class="page" data-page="about" aria-labelledby="about-title">
           <div class="page-heading"><div><span class="eyebrow">About</span><h1 id="about-title">Metaplasia</h1><p>A native Windows 11 shell customization engine with a Tauri control center.</p></div></div>
-          <div class="about-grid"><article class="about-card"><span>Application</span><strong>Metaplasia 0.1.0</strong><p>Taskbar, Start menu, and File Explorer customization from one local control surface.</p></article><article class="about-card"><span>Interface</span><strong>Tauri v2 + WebView2</strong><p>Bundled static assets, native window management, and hardware-accelerated rendering.</p></article><article class="about-card"><span>Transport</span><strong>Per-user named pipe</strong><p>Versioned binary IPC restricted to your current Windows user and session.</p></article></div>
+          <div class="about-grid"><article class="about-card"><span>Application</span><strong id="application-version">Metaplasia</strong><p>Taskbar, Start menu, and File Explorer customization from one local control surface.</p></article><article class="about-card"><span>Interface</span><strong>Tauri v2 + WebView2</strong><p>Bundled static assets, native window management, and hardware-accelerated rendering.</p></article><article class="about-card"><span>Transport</span><strong>Per-user named pipe</strong><p>Versioned binary IPC restricted to your current Windows user and session.</p></article></div>
+          <section class="update-card" aria-labelledby="updates-title">
+            <div class="update-heading">
+              <div><span class="eyebrow">Portable channel</span><h2 id="updates-title">Updates</h2><p>Signed full-package updates from GitHub Releases. No installer or background service.</p></div>
+              <label class="update-auto"><span><strong>Automatic checks and downloads</strong><small>Installation still requires confirmation.</small></span><span class="switch"><input id="automatic-updates" type="checkbox" aria-label="Automatically check for and download portable updates"><span></span></span></label>
+            </div>
+            <div class="update-status" aria-live="polite">
+              <span class="status-bar" id="update-status-bar"></span>
+              <div><strong id="update-status-title">Loading update status…</strong><p id="update-status-detail">The updater only contacts the Metaplasia GitHub Releases channel.</p></div>
+            </div>
+            <p class="update-notes" id="update-notes" hidden></p>
+            <div class="update-actions">
+              <button class="secondary-button" id="check-updates" type="button">Check now</button>
+              <button class="secondary-button" id="download-update" type="button" hidden>Download update</button>
+              <button class="primary-button" id="install-update" type="button" hidden>Install and restart</button>
+            </div>
+          </section>
         </section>
       </main>
     </div>
 
     <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <dialog class="confirm-dialog" id="update-confirm-dialog" aria-labelledby="update-confirm-title">
+      <form method="dialog">
+        <span class="eyebrow">Portable update</span>
+        <h2 id="update-confirm-title">Install the verified update?</h2>
+        <p>The complete portable binary set will be replaced. Your settings stay in <strong>%LOCALAPPDATA%\Metaplasia</strong>.</p>
+        <p>Metaplasia will close and Explorer and Start will briefly restart so the injected DLL can be replaced safely.</p>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" id="confirm-update-install" value="install">Install and restart</button></div>
+      </form>
+    </dialog>
   </body>
 </html>

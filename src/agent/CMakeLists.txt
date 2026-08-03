@@ -92,6 +92,8 @@ target_link_libraries(
         uiautomationcore
         dwmapi
         comctl32
+        shell32
+        windowscodecs
 )
 
 target_compile_definitions(metaplasia_agent PRIVATE METAPLASIA_AGENT_BUILD)

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 const FRAME_MAGIC: u32 = 0x504D_544D;
-const PROTOCOL_VERSION: u16 = 6;
+const PROTOCOL_VERSION: u16 = 9;
 const HEADER_SIZE: usize = 16;
 const MAX_PAYLOAD_SIZE: usize = 64 * 1024;
 const ACKNOWLEDGEMENT: u8 = 0xA5;
@@ -29,6 +29,7 @@ pub enum MessageKind {
     GetSettingsRequest = 3,
     SetCustomizationRequest = 4,
     GetXamlDiagnosticsRequest = 5,
+    PrepareUpdateRequest = 6,
     SnapshotResponse = 100,
     CommandResponse = 101,
     ErrorResponse = 102,
@@ -46,6 +47,7 @@ impl TryFrom<u16> for MessageKind {
             3 => Ok(Self::GetSettingsRequest),
             4 => Ok(Self::SetCustomizationRequest),
             5 => Ok(Self::GetXamlDiagnosticsRequest),
+            6 => Ok(Self::PrepareUpdateRequest),
             100 => Ok(Self::SnapshotResponse),
             101 => Ok(Self::CommandResponse),
             102 => Ok(Self::ErrorResponse),
@@ -332,5 +334,14 @@ mod tests {
         let mut reader = Reader::new(&encoded);
         assert_eq!(reader.string().unwrap(), "Meta · ");
         reader.finish().unwrap();
+    }
+
+    #[test]
+    fn portable_update_shutdown_message_is_versioned() {
+        assert_eq!(PROTOCOL_VERSION, 9);
+        assert_eq!(
+            MessageKind::try_from(6).unwrap(),
+            MessageKind::PrepareUpdateRequest
+        );
     }
 }

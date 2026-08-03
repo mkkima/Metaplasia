@@ -257,6 +257,15 @@ Result<bool> HostSettings::SetCustomization(
             changed = start_menu_background_color != request.integer_value;
             start_menu_background_color = request.integer_value;
             break;
+        case protocol::CustomizationId::start_menu_three_panel_layout_enabled:
+            changed = start_menu_three_panel_layout_enabled !=
+                request.boolean_value;
+            start_menu_three_panel_layout_enabled = request.boolean_value;
+            break;
+        case protocol::CustomizationId::start_menu_hide_all_apps:
+            changed = start_menu_hide_all_apps != request.boolean_value;
+            start_menu_hide_all_apps = request.boolean_value;
+            break;
         default:
             return Status(ErrorCode::invalid_argument, "Unknown customization");
     }
@@ -314,7 +323,9 @@ protocol::CustomizationSettings HostSettings::ToProtocol() const {
         start_menu_opacity_milli,
         start_menu_hide_recommended,
         start_menu_background_color_enabled,
-        start_menu_background_color};
+        start_menu_background_color,
+        start_menu_three_panel_layout_enabled,
+        start_menu_hide_all_apps};
 }
 
 SettingsStore::SettingsStore(std::filesystem::path path)
@@ -390,7 +401,7 @@ Result<HostSettings> SettingsStore::Load() const {
         if (key == "version") {
             version_seen = true;
             auto parsed = ParseUnsigned(value);
-            if (!parsed.ok() || parsed.value() < 1U || parsed.value() > 7U) {
+            if (!parsed.ok() || parsed.value() < 1U || parsed.value() > 9U) {
                 return Status(
                     ErrorCode::incompatible,
                     "Unsupported settings format version");
@@ -537,6 +548,28 @@ Result<HostSettings> SettingsStore::Load() const {
             settings.start_menu_hide_recommended = parsed.value();
             continue;
         }
+        if (key == "start_menu_three_panel_layout_enabled") {
+            auto parsed = ParseBoolean(value);
+            if (!parsed.ok()) {
+                return Status(
+                    parsed.status().code(),
+                    parsed.status().message() + " on line " +
+                        std::to_string(line_number));
+            }
+            settings.start_menu_three_panel_layout_enabled = parsed.value();
+            continue;
+        }
+        if (key == "start_menu_hide_all_apps") {
+            auto parsed = ParseBoolean(value);
+            if (!parsed.ok()) {
+                return Status(
+                    parsed.status().code(),
+                    parsed.status().message() + " on line " +
+                        std::to_string(line_number));
+            }
+            settings.start_menu_hide_all_apps = parsed.value();
+            continue;
+        }
 
         if (key != "taskbar_enabled" && key != "file_explorer_enabled" &&
             key != "start_menu_enabled") {
@@ -605,6 +638,12 @@ Result<HostSettings> SettingsStore::Load() const {
     if (settings_version < 7U) {
         settings.taskbar_capsule_enabled = false;
     }
+    if (settings_version < 8U) {
+        settings.start_menu_three_panel_layout_enabled = false;
+    }
+    if (settings_version < 9U) {
+        settings.start_menu_hide_all_apps = false;
+    }
     auto valid = settings.Validate();
     if (!valid.ok()) {
         return valid.status();
@@ -630,7 +669,7 @@ Result<void> SettingsStore::Save(const HostSettings& settings) const {
     }
 
     const std::string contents =
-        "version=7\n"
+        "version=9\n"
         "taskbar_enabled=" +
         std::string(settings.taskbar_enabled ? "1\n" : "0\n") +
         "file_explorer_enabled=" +
@@ -674,7 +713,12 @@ Result<void> SettingsStore::Save(const HostSettings& settings) const {
         std::string(
             settings.start_menu_background_color_enabled ? "1\n" : "0\n") +
         "start_menu_background_color=" +
-        std::to_string(settings.start_menu_background_color) + "\n";
+        std::to_string(settings.start_menu_background_color) + "\n" +
+        "start_menu_three_panel_layout_enabled=" +
+        std::string(
+            settings.start_menu_three_panel_layout_enabled ? "1\n" : "0\n") +
+        "start_menu_hide_all_apps=" +
+        std::string(settings.start_menu_hide_all_apps ? "1\n" : "0\n");
 
     static std::atomic<std::uint64_t> temporary_sequence{0};
     const auto temporary =

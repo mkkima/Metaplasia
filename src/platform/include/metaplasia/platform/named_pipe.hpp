@@ -28,8 +28,15 @@ private:
 class NamedPipeServer final {
 public:
     using Handler = std::function<Result<protocol::Frame>(const protocol::Frame&)>;
+    using TransactionObserver = std::function<void(
+        const protocol::Frame&,
+        const protocol::Frame&,
+        bool)>;
 
-    NamedPipeServer(std::wstring pipe_name, Handler handler);
+    NamedPipeServer(
+        std::wstring pipe_name,
+        Handler handler,
+        TransactionObserver transaction_observer = {});
 
     NamedPipeServer(const NamedPipeServer&) = delete;
     NamedPipeServer& operator=(const NamedPipeServer&) = delete;
@@ -42,6 +49,7 @@ public:
 private:
     std::wstring pipe_name_;
     Handler handler_;
+    TransactionObserver transaction_observer_;
 };
 
 }  // namespace metaplasia::platform

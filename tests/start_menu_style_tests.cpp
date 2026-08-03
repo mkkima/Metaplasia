@@ -14,6 +14,8 @@ namespace {
 
 using metaplasia::agent::ShellXamlElementAccessor;
 using metaplasia::agent::ShellXamlStyle;
+using metaplasia::agent::kStartMenuThreePanelFrameHeight;
+using metaplasia::agent::kStartMenuThreePanelFrameWidth;
 
 void Require(const bool condition, const char* message) {
     if (!condition) {
@@ -54,6 +56,15 @@ public:
         std::size_t brush_writes{0};
         OutlineState outline{};
         std::size_t outline_writes{0};
+        metaplasia::agent::ShellElementLayout layout{};
+        bool layout_active{false};
+        std::size_t layout_writes{0};
+    };
+
+    struct LayoutSnapshot final {
+        bool visible{true};
+        bool layout_active{false};
+        metaplasia::agent::ShellElementLayout layout{};
     };
 
     Element& Add(const std::uint64_t handle, const double opacity = 1.0) {
@@ -325,6 +336,246 @@ public:
         delete reinterpret_cast<OutlineState*>(snapshot);
     }
 
+    HRESULT CaptureElementLayout(
+        const std::uint64_t handle,
+        std::uint64_t& snapshot) noexcept override {
+        snapshot = 0;
+        Element* element = Find(handle);
+        if (element == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        if (element->fail_read) {
+            return E_FAIL;
+        }
+        auto* captured = new (std::nothrow) LayoutSnapshot{
+            element->visible,
+            element->layout_active,
+            element->layout};
+        if (captured == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        snapshot = reinterpret_cast<std::uint64_t>(captured);
+        return S_OK;
+    }
+
+    HRESULT WriteElementLayout(
+        const std::uint64_t handle,
+        const metaplasia::agent::ShellElementLayout& layout) noexcept override {
+        Element* element = Find(handle);
+        if (element == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        if (element->fail_write) {
+            return E_FAIL;
+        }
+        element->layout = layout;
+        element->layout_active = true;
+        if (layout.write_visibility) {
+            element->visible = layout.visible;
+        }
+        ++element->layout_writes;
+        return S_OK;
+    }
+
+    HRESULT RestoreElementLayout(
+        const std::uint64_t handle,
+        const std::uint64_t snapshot) noexcept override {
+        Element* element = Find(handle);
+        if (element == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        if (element->fail_write || snapshot == 0) {
+            return E_FAIL;
+        }
+        const auto* captured =
+            reinterpret_cast<const LayoutSnapshot*>(snapshot);
+        element->visible = captured->visible;
+        element->layout_active = captured->layout_active;
+        element->layout = captured->layout;
+        ++element->layout_writes;
+        return S_OK;
+    }
+
+    void ReleaseElementLayoutSnapshot(
+        const std::uint64_t snapshot) noexcept override {
+        delete reinterpret_cast<LayoutSnapshot*>(snapshot);
+    }
+
+    HRESULT CreateStartMenuFrameEnvelope(
+        const std::uint64_t frame_handle,
+        std::uint64_t& snapshot) noexcept override {
+        snapshot = 0;
+        if (Find(frame_handle) == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        auto* token = new (std::nothrow) std::uint8_t(1);
+        if (token == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        snapshot = reinterpret_cast<std::uint64_t>(token);
+        frame_envelope_active = true;
+        ++frame_envelope_writes;
+        return S_OK;
+    }
+
+    HRESULT RestoreStartMenuFrameEnvelope(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0) {
+            return E_INVALIDARG;
+        }
+        frame_envelope_active = false;
+        ++frame_envelope_writes;
+        return S_OK;
+    }
+
+    void ReleaseStartMenuFrameEnvelopeSnapshot(
+        const std::uint64_t snapshot) noexcept override {
+        delete reinterpret_cast<std::uint8_t*>(snapshot);
+    }
+
+    HRESULT CreateStartMenuThreePanelSurface(
+        const std::uint64_t main_menu_handle,
+        const std::uint64_t acrylic_border_handle,
+        const std::uint64_t acrylic_overlay_handle,
+        std::uint64_t& snapshot) noexcept override {
+        snapshot = 0;
+        if (Find(main_menu_handle) == nullptr ||
+            Find(acrylic_border_handle) == nullptr ||
+            Find(acrylic_overlay_handle) == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        auto* token = new (std::nothrow) std::uint8_t(1);
+        if (token == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        snapshot = reinterpret_cast<std::uint64_t>(token);
+        last_surface_main_menu = main_menu_handle;
+        last_surface_acrylic_border = acrylic_border_handle;
+        last_surface_acrylic_overlay = acrylic_overlay_handle;
+        surface_active = true;
+        ++surface_writes;
+        return S_OK;
+    }
+
+    HRESULT UpdateStartMenuThreePanelSurface(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0 || !surface_active) {
+            return E_INVALIDARG;
+        }
+        ++surface_writes;
+        return S_OK;
+    }
+
+    HRESULT RestoreStartMenuThreePanelSurface(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0) {
+            return E_INVALIDARG;
+        }
+        surface_active = false;
+        ++surface_writes;
+        return S_OK;
+    }
+
+    void ReleaseStartMenuThreePanelSurfaceSnapshot(
+        const std::uint64_t snapshot) noexcept override {
+        delete reinterpret_cast<std::uint8_t*>(snapshot);
+    }
+
+    HRESULT AttachStartMenuRecommended(
+        const std::uint64_t recommended_handle,
+        const std::uint64_t original_parent_handle,
+        const std::uint64_t destination_panel_handle,
+        std::uint64_t& snapshot) noexcept override {
+        snapshot = 0;
+        if (Find(recommended_handle) == nullptr ||
+            Find(original_parent_handle) == nullptr ||
+            Find(destination_panel_handle) == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        auto* token = new (std::nothrow) std::uint8_t(1);
+        if (token == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        snapshot = reinterpret_cast<std::uint64_t>(token);
+        recommended_attached = true;
+        ++recommended_writes;
+        return S_OK;
+    }
+
+    HRESULT RestoreStartMenuRecommended(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0) {
+            return E_INVALIDARG;
+        }
+        recommended_attached = false;
+        ++recommended_writes;
+        return S_OK;
+    }
+
+    void ReleaseStartMenuRecommendedSnapshot(
+        const std::uint64_t snapshot) noexcept override {
+        delete reinterpret_cast<std::uint8_t*>(snapshot);
+    }
+
+    HRESULT CreateStartMenuAllAppsPanel(
+        const std::uint64_t panel_surface_snapshot,
+        const bool visible,
+        std::uint64_t& snapshot) noexcept override {
+        snapshot = 0;
+        if (panel_surface_snapshot == 0 || !surface_active) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        auto* token = new (std::nothrow) std::uint8_t(1);
+        if (token == nullptr) {
+            return E_OUTOFMEMORY;
+        }
+        snapshot = reinterpret_cast<std::uint64_t>(token);
+        all_apps_attached = true;
+        all_apps_visible = visible;
+        ++all_apps_writes;
+        return S_OK;
+    }
+
+    HRESULT UpdateStartMenuAllAppsVisibility(
+        const std::uint64_t snapshot,
+        const bool visible) noexcept override {
+        if (snapshot == 0 || !all_apps_attached) {
+            return E_INVALIDARG;
+        }
+        all_apps_visible = visible;
+        ++all_apps_writes;
+        return S_OK;
+    }
+
+    HRESULT RestoreStartMenuAllApps(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0) {
+            return E_INVALIDARG;
+        }
+        all_apps_attached = false;
+        all_apps_visible = false;
+        ++all_apps_writes;
+        return S_OK;
+    }
+
+    void ReleaseStartMenuAllAppsSnapshot(
+        const std::uint64_t snapshot) noexcept override {
+        delete reinterpret_cast<std::uint8_t*>(snapshot);
+    }
+
+    bool surface_active{false};
+    bool all_apps_attached{false};
+    bool all_apps_visible{false};
+    bool recommended_attached{false};
+    bool frame_envelope_active{false};
+    std::size_t surface_writes{0};
+    std::size_t all_apps_writes{0};
+    std::size_t recommended_writes{0};
+    std::size_t frame_envelope_writes{0};
+    std::uint64_t last_surface_main_menu{0};
+    std::uint64_t last_surface_acrylic_border{0};
+    std::uint64_t last_surface_acrylic_overlay{0};
+
 private:
     std::array<Element, 48> elements_{};
 };
@@ -338,7 +589,9 @@ bool Near(const double left, const double right) noexcept {
 int main() {
     using metaplasia::agent::IsSupportedStartMenuRootType;
     using metaplasia::agent::IsStartMenuRecommendedElement;
+    using metaplasia::agent::IdentifyStartMenuLayoutRule;
     using metaplasia::agent::IdentifyShellBackgroundRule;
+    using metaplasia::agent::StartMenuLayoutRule;
     using metaplasia::agent::ShellBackgroundRule;
     using metaplasia::agent::kMaximumStartMenuOpacityMilli;
     using metaplasia::agent::kMaximumTrackedShellXamlElements;
@@ -381,6 +634,68 @@ int main() {
             L"Windows.UI.Xaml.Controls.Grid",
             L"AcrylicBorder") == ShellBackgroundRule::none,
         "reject mismatched Start surface type");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"StartMenu.PinnedList",
+            L"StartMenuPinnedList") == StartMenuLayoutRule::pinned_list,
+        "identify the exact native pinned-list container");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"MainMenu") == StartMenuLayoutRule::frame_container,
+        "identify an exact internal frame container");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"Windows.UI.Xaml.Controls.Border",
+            L"StartDropShadow") == StartMenuLayoutRule::frame_shadow,
+        "identify the native outer Start shadow");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"NavPanePlaceholder") == StartMenuLayoutRule::navigation_pane,
+        "position the footer through its clipping parent");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"StartDocked.NavigationPaneView",
+            L"UserControl") == StartMenuLayoutRule::navigation_content,
+        "size the native footer inside its clipping parent");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"Windows.UI.Xaml.Controls.GridView",
+            L"AllAppsGrid") == StartMenuLayoutRule::none,
+        "leave the shared native pinned-content grid intact");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::explorer_shell,
+            L"StartMenu.PinnedList",
+            L"StartMenuPinnedList") == StartMenuLayoutRule::none,
+        "never apply Start layout rules inside Explorer");
+    const auto navigation_pane_layout =
+        metaplasia::agent::StartMenuLayoutFor(
+            StartMenuLayoutRule::navigation_pane);
+    const auto navigation_content_layout =
+        metaplasia::agent::StartMenuLayoutFor(
+            StartMenuLayoutRule::navigation_content);
+    Require(
+        Near(navigation_pane_layout.width, 280.0) &&
+            Near(navigation_pane_layout.height, 72.0) &&
+            Near(navigation_pane_layout.margin.bottom, 30.0) &&
+            navigation_pane_layout.reset_grid_position &&
+            navigation_pane_layout.grid_row == 0 &&
+            navigation_pane_layout.grid_row_span == 16 &&
+            navigation_pane_layout.vertical_alignment ==
+                metaplasia::agent::ShellVerticalAlignment::bottom,
+        "reserve and unclip enough footer height for the native user tile");
+    Require(
+        Near(navigation_content_layout.width, 280.0) &&
+            Near(navigation_content_layout.height, 72.0),
+        "keep the native footer content inside its expanded clipping parent");
 
     FakeAccessor accessor;
     ShellXamlStyle style(
@@ -542,6 +857,263 @@ int main() {
             0xFF000000U) &&
             start_color_style.ApplyDesiredToTrackedElements() == S_OK,
         "release Start brush ownership");
+
+    FakeAccessor layout_accessor;
+    ShellXamlStyle layout_style(
+        layout_accessor,
+        metaplasia::protocol::AgentTarget::start_menu);
+    for (const std::uint64_t handle :
+         {500U, 501U, 502U, 503U, 504U, 505U, 506U, 507U,
+           508U, 509U, 510U, 511U, 512U, 513U, 514U, 515U,
+           516U, 517U, 518U, 519U, 520U, 521U}) {
+        layout_accessor.Add(handle);
+    }
+    Require(
+        layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true),
+        "enable the reversible three-panel Start layout");
+    Require(
+        layout_style.OnElementAdded(
+            500,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"MainMenu") == S_OK,
+        "expand and observe the exact panel host");
+    Require(
+        layout_style.OnElementAdded(
+            501,
+            L"Windows.UI.Xaml.Controls.Border",
+            L"AcrylicBorder",
+            500) == S_OK &&
+        layout_style.OnElementAdded(
+            515,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"MainContent",
+            500) == S_FALSE &&
+        layout_style.OnElementAdded(
+            502,
+            L"Windows.UI.Xaml.Controls.Border",
+            L"AcrylicOverlay",
+            515) == S_OK,
+        "create panel surfaces after both native acrylic layers exist");
+    Require(
+        layout_style.OnElementAdded(
+            518,
+            L"Windows.UI.Xaml.Controls.Border",
+            L"AcrylicBorder",
+            519) == S_OK &&
+        layout_style.OnElementAdded(
+            520,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"MainContent",
+            519) == S_FALSE &&
+        layout_style.OnElementAdded(
+            521,
+            L"Windows.UI.Xaml.Controls.Border",
+            L"AcrylicOverlay",
+            520) == S_OK,
+        "observe duplicate companion surfaces without selecting them");
+    Require(
+        layout_accessor.last_surface_main_menu == 500 &&
+            layout_accessor.last_surface_acrylic_border == 501 &&
+            layout_accessor.last_surface_acrylic_overlay == 502,
+        "bind the three-panel surface only to the MainMenu descendants");
+    Require(
+        layout_style.OnElementAdded(
+            503,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"TopLevelHeader") == S_OK,
+        "track the shared three-column content host");
+    Require(
+        layout_style.OnElementAdded(
+            506,
+            L"StartMenu.StartBlendedFlexFrame") == S_OK &&
+        layout_style.OnElementAdded(
+            507,
+            L"StartMenu.SearchBoxToggleButton",
+            L"SearchBoxToggleButton") == S_OK &&
+        layout_style.OnElementAdded(
+            508,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"PinnedListHeaderGrid") == S_OK &&
+        layout_style.OnElementAdded(
+            509,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"ShowMorePinnedGrid") == S_OK &&
+        layout_style.OnElementAdded(
+            510,
+            L"StartMenu.PinnedList",
+            L"StartMenuPinnedList") == S_OK &&
+        layout_style.OnElementAdded(
+            511,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"TopLevelSuggestionsRoot",
+            503) == S_OK &&
+        layout_style.OnElementAdded(
+            512,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"NavPanePlaceholder") == S_OK &&
+        layout_style.OnElementAdded(
+            513,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"FrameRoot") == S_OK &&
+        layout_style.OnElementAdded(
+            514,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"AnimationRoot") == S_OK &&
+        layout_style.OnElementAdded(
+            516,
+            L"Windows.UI.Xaml.Controls.Border",
+            L"StartDropShadow") == S_OK &&
+        layout_style.OnElementAdded(
+            517,
+            L"StartDocked.NavigationPaneView",
+            L"UserControl") == S_OK,
+        "position native Start sections without replacing their controls");
+    Require(
+        layout_accessor.surface_active && layout_accessor.all_apps_attached &&
+            layout_accessor.recommended_attached &&
+            layout_accessor.frame_envelope_active,
+        "activate the expanded frame envelope, panel surfaces, and "
+        "independent All apps list");
+    Require(
+        layout_accessor.Find(506)->layout_active &&
+            Near(
+                layout_accessor.Find(506)->layout.width,
+                kStartMenuThreePanelFrameWidth) &&
+            Near(
+                layout_accessor.Find(506)->layout.height,
+                kStartMenuThreePanelFrameHeight) &&
+            layout_accessor.Find(500)->layout_active &&
+            layout_accessor.Find(513)->layout_active &&
+            !layout_accessor.Find(507)->visible &&
+            !layout_accessor.Find(516)->visible &&
+            layout_accessor.Find(517)->layout_active &&
+            layout_accessor.Find(510)->layout_active &&
+            layout_accessor.Find(511)->layout_active,
+        "apply the reference geometry to frame, pinned, and Recommended");
+    Require(
+        layout_accessor.all_apps_visible,
+        "show the custom All apps list by default");
+    Require(
+        layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true,
+            true) &&
+            layout_style.ApplyDesiredToTrackedElements() == S_OK,
+        "hide All apps content without changing three-panel geometry");
+    Require(
+        layout_accessor.surface_active && layout_accessor.all_apps_attached &&
+            !layout_accessor.all_apps_visible &&
+            layout_accessor.recommended_attached &&
+            layout_accessor.frame_envelope_active,
+        "keep every three-panel resource attached while All apps is empty");
+    Require(
+        layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true,
+            false) &&
+            layout_style.ApplyDesiredToTrackedElements() == S_OK &&
+            layout_accessor.all_apps_visible,
+        "restore All apps content live without rebuilding the layout");
+    Require(
+        layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            false) &&
+        layout_style.ApplyDesiredToTrackedElements() == S_OK,
+        "disable the three-panel layout while Start remains injected");
+    Require(
+        !layout_accessor.surface_active && !layout_accessor.all_apps_attached &&
+            !layout_accessor.recommended_attached &&
+            !layout_accessor.frame_envelope_active &&
+            layout_accessor.Find(507)->visible &&
+            layout_accessor.Find(516)->visible &&
+            !layout_accessor.Find(517)->layout_active &&
+            !layout_accessor.Find(510)->layout_active &&
+            !layout_accessor.Find(513)->layout_active,
+        "restore exact native ownership when the layout switch is off");
+    Require(
+        layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true) &&
+        layout_style.ApplyDesiredToTrackedElements() == S_OK &&
+        layout_accessor.surface_active &&
+        layout_accessor.all_apps_attached &&
+        layout_accessor.recommended_attached &&
+        layout_accessor.frame_envelope_active,
+        "recreate every three-panel resource after a live re-enable");
+    Require(
+        layout_style.Configure(
+            false,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true) &&
+        layout_style.ApplyDesiredToTrackedElements() == S_OK,
+        "release all Start layout snapshots on target disable");
 
     Require(
         style.Configure(true, 1000, false, false, false, 900, false),

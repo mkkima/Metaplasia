@@ -675,7 +675,8 @@ Result<InjectionResult> Injector::ConfigureInternal(
         protocol::agent_feature_file_explorer_background_color |
         protocol::agent_feature_start_menu_background_color |
         protocol::agent_feature_file_explorer_custom_scrollbar |
-        protocol::agent_feature_taskbar_capsule;
+        protocol::agent_feature_taskbar_capsule |
+        protocol::agent_feature_start_menu_three_panel_layout;
     const bool scrollbar_features_valid =
         (configuration.feature_flags &
          protocol::agent_feature_file_explorer_custom_scrollbar) == 0 ||
@@ -685,7 +686,8 @@ Result<InjectionResult> Injector::ConfigureInternal(
         (configuration.target == protocol::AgentTarget::explorer_shell &&
          (configuration.feature_flags &
           (protocol::agent_feature_start_menu_root_opacity |
-           protocol::agent_feature_start_menu_background_color)) == 0) ||
+           protocol::agent_feature_start_menu_background_color |
+           protocol::agent_feature_start_menu_three_panel_layout)) == 0) ||
         (configuration.target == protocol::AgentTarget::start_menu &&
          (configuration.feature_flags &
            (protocol::agent_feature_taskbar_clock_prefix |
@@ -708,6 +710,11 @@ Result<InjectionResult> Injector::ConfigureInternal(
         configuration.taskbar_background_color_enabled > 1 ||
         configuration.file_explorer_background_color_enabled > 1 ||
         configuration.start_menu_background_color_enabled > 1 ||
+        configuration.start_menu_three_panel_layout_enabled > 1 ||
+        configuration.start_menu_hide_all_apps > 1 ||
+        std::ranges::any_of(
+            configuration.reserved_tail,
+            [](const std::uint8_t value) { return value != 0; }) ||
         (configuration.feature_flags & ~known_features) != 0 ||
         !scrollbar_features_valid ||
         !target_features_valid ||

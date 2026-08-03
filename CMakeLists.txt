@@ -6,6 +6,13 @@ if(NOT WIN32)
     message(FATAL_ERROR "Metaplasia currently supports Windows only")
 endif()
 
+if(MSVC)
+    # Keep the five-file release self-contained. Requiring a separately
+    # installed VC++ redistributable would violate the portable distribution
+    # contract and could also split CRT ownership across injected components.
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 option(METAPLASIA_BUILD_UI "Build the Tauri control center" ON)
 option(METAPLASIA_BUILD_TESTS "Build unit tests" ON)
 option(METAPLASIA_ENABLE_HARDENING "Enable compiler and linker hardening" ON)

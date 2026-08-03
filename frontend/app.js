@@ -29,9 +29,25 @@ const ROUTE_TITLES = {
   taskbar: "Taskbar",
   start: "Start menu",
   explorer: "File Explorer",
+  "notifications-audio": "Notifications & audio",
   diagnostics: "Diagnostics",
   about: "About"
 };
+
+const DEMO_STORAGE_KEY = "metaplasia.notifications-audio-demo.v1";
+const UPDATE_STORAGE_KEY = "metaplasia.portable-updates.automatic.v1";
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DEMO_DEFAULTS = Object.freeze({
+  notificationPosition: "top",
+  notificationDensity: "comfortable",
+  notificationActions: true,
+  notificationDuration: 6,
+  audioLayout: "expanded",
+  showOutputDevice: true,
+  showMediaControls: true,
+  volume: 68,
+  muted: false
+});
 
 const STATE_LABELS = {
   disabled: "Disabled",
@@ -56,7 +72,20 @@ const elements = {
   refreshDiagnostics: document.querySelector("#refresh-diagnostics"),
   xamlSummary: document.querySelector("#xaml-summary"),
   xamlTypes: document.querySelector("#xaml-types"),
-  toastRegion: document.querySelector("#toast-region")
+  toastRegion: document.querySelector("#toast-region"),
+  demoDesktop: document.querySelector("[data-demo-desktop]"),
+  notificationPreview: document.querySelector("[data-notification-preview]"),
+  audioPreview: document.querySelector("[data-audio-preview]"),
+  applicationVersion: document.querySelector("#application-version"),
+  automaticUpdates: document.querySelector("#automatic-updates"),
+  checkUpdates: document.querySelector("#check-updates"),
+  downloadUpdate: document.querySelector("#download-update"),
+  installUpdate: document.querySelector("#install-update"),
+  updateStatusBar: document.querySelector("#update-status-bar"),
+  updateStatusTitle: document.querySelector("#update-status-title"),
+  updateStatusDetail: document.querySelector("#update-status-detail"),
+  updateNotes: document.querySelector("#update-notes"),
+  updateConfirmDialog: document.querySelector("#update-confirm-dialog")
 };
 
 const runtime = {
@@ -64,7 +93,13 @@ const runtime = {
   state: null,
   refreshing: false,
   pending: new Set(),
-  pollTimer: 0
+  pollTimer: 0,
+  demo: loadDemoSettings(),
+  demoNotificationTimer: 0,
+  demoMediaPlaying: false,
+  updateStatus: null,
+  updateBusy: false,
+  updateTimer: 0
 };
 
 function icon(id) {
@@ -135,6 +170,13 @@ function bindControls() {
     control.addEventListener("change", async () => {
       const key = `custom:${control.dataset.customToggle}`;
       await runPending(key, async () => {
+        if (control.dataset.customToggle === "startThreePanelLayoutEnabled" &&
+            control.checked && runtime.state?.settings?.startMenuHideAllAppsPolicyActive) {
+          await invokeCommand("set_start_all_apps_hidden", {
+            hidden: true,
+            threePanelEnabled: true
+          });
+        }
         await invokeCommand("set_customization", {
           request: { id: control.dataset.customToggle, booleanValue: control.checked }
         });
@@ -146,7 +188,12 @@ function bindControls() {
     control.addEventListener("change", async () => {
       const key = `policy:${control.dataset.policyToggle}`;
       await runPending(key, async () => {
-        await invokeCommand("set_start_all_apps_hidden", { hidden: control.checked });
+        await invokeCommand("set_start_all_apps_hidden", {
+          hidden: control.checked,
+          threePanelEnabled: Boolean(
+            runtime.state?.settings?.startMenuThreePanelLayoutEnabled
+          )
+        });
       });
     });
   });
@@ -180,6 +227,59 @@ function bindControls() {
     });
   });
 
+  document.querySelectorAll("[data-demo-choice]").forEach((button) => {
+    button.addEventListener("click", () => {
+      updateDemoSetting(button.dataset.demoChoice, button.dataset.demoValue);
+    });
+  });
+
+  document.querySelectorAll("[data-demo-toggle]").forEach((control) => {
+    control.addEventListener("change", () => {
+      updateDemoSetting(control.dataset.demoToggle, control.checked);
+    });
+  });
+
+  document.querySelectorAll("[data-demo-range]").forEach((control) => {
+    control.addEventListener("input", () => {
+      updateDemoSetting(control.dataset.demoRange, Number(control.value));
+    });
+  });
+
+  document.querySelectorAll("[data-demo-volume]").forEach((control) => {
+    control.addEventListener("input", () => {
+      runtime.demo.muted = false;
+      updateDemoSetting("volume", Number(control.value));
+    });
+  });
+
+  document.querySelectorAll("[data-demo-range-step]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const range = document.getElementById(button.dataset.demoRangeStep);
+      if (!range) return;
+      const next = Number(range.value) + Number(button.dataset.delta);
+      range.value = String(Math.max(Number(range.min), Math.min(Number(range.max), next)));
+      range.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  });
+
+  document.querySelectorAll("[data-demo-volume-mute]").forEach((button) => {
+    button.addEventListener("click", () => updateDemoSetting("muted", !runtime.demo.muted));
+  });
+
+  document.querySelector("[data-demo-show-notification]")?.addEventListener("click", showDemoNotification);
+  document.querySelector("[data-demo-show-audio]")?.addEventListener("click", showDemoAudio);
+  document.querySelectorAll("[data-demo-dismiss-notification]").forEach((button) => {
+    button.addEventListener("click", dismissDemoNotification);
+  });
+  document.querySelector("[data-demo-reset]")?.addEventListener("click", resetDemoSettings);
+  document.querySelector("[data-demo-notification-open]")?.addEventListener("click", () => {
+    showToast("Demo action only — no Windows notification was opened.", false);
+  });
+  document.querySelector("[data-demo-device]")?.addEventListener("click", () => {
+    showToast("Output device picker is part of the UI demo.", false);
+  });
+  document.querySelector("[data-demo-media-toggle]")?.addEventListener("click", toggleDemoMedia);
+
   document.querySelectorAll("[data-text-form]").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -194,6 +294,339 @@ function bindControls() {
   });
 
   elements.refreshDiagnostics.addEventListener("click", refreshXamlDiagnostics);
+
+  elements.automaticUpdates?.addEventListener("change", () => {
+    saveAutomaticUpdates(elements.automaticUpdates.checked);
+    if (elements.automaticUpdates.checked) checkForPortableUpdate(true);
+  });
+  elements.checkUpdates?.addEventListener("click", () => checkForPortableUpdate(false));
+  elements.downloadUpdate?.addEventListener("click", downloadPortableUpdate);
+  elements.installUpdate?.addEventListener("click", () => {
+    if (!runtime.updateBusy) elements.updateConfirmDialog?.showModal();
+  });
+  elements.updateConfirmDialog?.addEventListener("close", () => {
+    if (elements.updateConfirmDialog.returnValue === "install") installPortableUpdate();
+  });
+}
+
+function loadAutomaticUpdates() {
+  try {
+    const stored = window.localStorage.getItem(UPDATE_STORAGE_KEY);
+    return stored === null ? true : stored === "1";
+  } catch {
+    return true;
+  }
+}
+
+function saveAutomaticUpdates(enabled) {
+  try {
+    window.localStorage.setItem(UPDATE_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {
+    // A hardened WebView profile can reject storage. The current-session
+    // setting still works and remains safe because installation is explicit.
+  }
+}
+
+function updatePhaseTitle(status) {
+  const version = status?.availableVersion;
+  switch (status?.phase) {
+    case "unconfigured": return "Update channel is not configured in this build";
+    case "checking": return "Checking for a signed portable update…";
+    case "current": return "Metaplasia is up to date";
+    case "available": return version ? `Metaplasia ${version} is available` : "An update is available";
+    case "downloading": return version ? `Downloading Metaplasia ${version}…` : "Downloading update…";
+    case "ready": return version ? `Metaplasia ${version} is ready` : "Update is ready";
+    case "installing": return "Installing the verified portable update…";
+    case "error": return "Portable update failed";
+    default: return "Portable update channel";
+  }
+}
+
+function renderUpdateStatus(status = runtime.updateStatus) {
+  if (!status || !elements.updateStatusTitle) return;
+  runtime.updateStatus = status;
+  elements.applicationVersion.textContent = `Metaplasia ${status.currentVersion}`;
+  elements.updateStatusTitle.textContent = updatePhaseTitle(status);
+  elements.updateStatusDetail.textContent = status.detail || "Ready to check GitHub Releases.";
+  elements.updateNotes.textContent = status.notes || "";
+  elements.updateNotes.hidden = !status.notes;
+  const isError = status.phase === "error";
+  const isPositive = ["current", "available", "ready"].includes(status.phase);
+  elements.updateStatusBar.classList.toggle("is-error", isError);
+  elements.updateStatusBar.classList.toggle("is-active", isPositive);
+
+  const enabled = Boolean(status.configured) && !runtime.updateBusy;
+  elements.checkUpdates.disabled = !enabled;
+  elements.downloadUpdate.hidden = status.phase !== "available" || status.downloaded;
+  elements.downloadUpdate.disabled = !enabled;
+  elements.installUpdate.hidden = status.phase !== "ready" || !status.downloaded;
+  elements.installUpdate.disabled = !enabled;
+  elements.automaticUpdates.disabled = !status.configured || runtime.updateBusy;
+}
+
+async function checkForPortableUpdate(automatic) {
+  if (!invoke || runtime.updateBusy) return;
+  runtime.updateBusy = true;
+  renderUpdateStatus({
+    ...(runtime.updateStatus || {}),
+    configured: runtime.updateStatus?.configured !== false,
+    currentVersion: runtime.updateStatus?.currentVersion || "",
+    phase: "checking",
+    detail: "Downloading and verifying the signed release manifest."
+  });
+  try {
+    let status = await invoke("check_portable_update");
+    runtime.updateStatus = status;
+    if (status.availableVersion && !status.downloaded &&
+        (automatic || elements.automaticUpdates.checked)) {
+      status = await invoke("download_portable_update");
+    }
+    runtime.updateStatus = status;
+  } catch (error) {
+    runtime.updateStatus = {
+      ...(runtime.updateStatus || {}),
+      configured: true,
+      phase: "error",
+      detail: readError(error),
+      notes: "",
+      downloaded: false
+    };
+    if (!automatic) showToast(readError(error), true);
+  } finally {
+    runtime.updateBusy = false;
+    renderUpdateStatus();
+  }
+}
+
+async function downloadPortableUpdate() {
+  if (!invoke || runtime.updateBusy) return;
+  runtime.updateBusy = true;
+  renderUpdateStatus({
+    ...(runtime.updateStatus || {}),
+    phase: "downloading",
+    detail: "Downloading and verifying the complete portable package."
+  });
+  try {
+    runtime.updateStatus = await invoke("download_portable_update");
+  } catch (error) {
+    runtime.updateStatus = {
+      ...(runtime.updateStatus || {}),
+      phase: "error",
+      detail: readError(error)
+    };
+    showToast(readError(error), true);
+  } finally {
+    runtime.updateBusy = false;
+    renderUpdateStatus();
+  }
+}
+
+async function installPortableUpdate() {
+  if (!invoke || runtime.updateBusy || runtime.updateStatus?.phase !== "ready") return;
+  runtime.updateBusy = true;
+  renderUpdateStatus({
+    ...runtime.updateStatus,
+    phase: "installing",
+    detail: "Stopping local components and starting the portable update helper."
+  });
+  try {
+    await invoke("apply_portable_update");
+  } catch (error) {
+    runtime.updateBusy = false;
+    runtime.updateStatus = {
+      ...runtime.updateStatus,
+      phase: "error",
+      detail: readError(error)
+    };
+    renderUpdateStatus();
+    showToast(readError(error), true);
+  }
+}
+
+async function initializePortableUpdates() {
+  if (!invoke || !elements.automaticUpdates) return;
+  elements.automaticUpdates.checked = loadAutomaticUpdates();
+  try {
+    runtime.updateStatus = await invoke("get_portable_update_status");
+    renderUpdateStatus();
+    if (runtime.updateStatus.configured && elements.automaticUpdates.checked) {
+      window.setTimeout(() => checkForPortableUpdate(true), 2500);
+    }
+    window.clearInterval(runtime.updateTimer);
+    runtime.updateTimer = window.setInterval(() => {
+      if (elements.automaticUpdates.checked && !document.hidden) {
+        checkForPortableUpdate(true);
+      }
+    }, UPDATE_CHECK_INTERVAL_MS);
+  } catch (error) {
+    runtime.updateStatus = {
+      configured: false,
+      currentVersion: "",
+      availableVersion: null,
+      notes: "",
+      phase: "error",
+      detail: readError(error),
+      downloaded: false
+    };
+    renderUpdateStatus();
+  }
+}
+
+function loadDemoSettings() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(DEMO_STORAGE_KEY) || "null");
+    return sanitizeDemoSettings(stored);
+  } catch {
+    return { ...DEMO_DEFAULTS };
+  }
+}
+
+function sanitizeDemoSettings(value) {
+  const settings = { ...DEMO_DEFAULTS };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return settings;
+
+  if (["top", "bottom"].includes(value.notificationPosition)) {
+    settings.notificationPosition = value.notificationPosition;
+  }
+  if (["compact", "comfortable"].includes(value.notificationDensity)) {
+    settings.notificationDensity = value.notificationDensity;
+  }
+  if (["compact", "expanded"].includes(value.audioLayout)) {
+    settings.audioLayout = value.audioLayout;
+  }
+  for (const key of ["notificationActions", "showOutputDevice", "showMediaControls", "muted"]) {
+    if (typeof value[key] === "boolean") settings[key] = value[key];
+  }
+  if (Number.isFinite(value.notificationDuration)) {
+    settings.notificationDuration = Math.round(Math.max(3, Math.min(15, value.notificationDuration)));
+  }
+  if (Number.isFinite(value.volume)) {
+    settings.volume = Math.round(Math.max(0, Math.min(100, value.volume)));
+  }
+  return settings;
+}
+
+function saveDemoSettings() {
+  try {
+    window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(runtime.demo));
+  } catch {
+    // Storage can be unavailable in hardened WebView profiles; the live demo
+    // remains functional for the current application session.
+  }
+}
+
+function updateDemoSetting(key, value) {
+  const candidate = sanitizeDemoSettings({ ...runtime.demo, [key]: value });
+  runtime.demo = candidate;
+  saveDemoSettings();
+  renderDemoSettings();
+}
+
+function resetDemoSettings() {
+  window.clearTimeout(runtime.demoNotificationTimer);
+  runtime.demoNotificationTimer = 0;
+  runtime.demo = { ...DEMO_DEFAULTS };
+  runtime.demoMediaPlaying = false;
+  saveDemoSettings();
+  elements.notificationPreview?.classList.remove("is-hidden");
+  elements.audioPreview?.classList.remove("is-hidden");
+  renderDemoSettings();
+  replayDemoSurface(elements.notificationPreview);
+  replayDemoSurface(elements.audioPreview);
+}
+
+function renderDemoSettings() {
+  const settings = runtime.demo;
+  document.querySelectorAll("[data-demo-choice]").forEach((button) => {
+    const selected = settings[button.dataset.demoChoice] === button.dataset.demoValue;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  document.querySelectorAll("[data-demo-toggle]").forEach((control) => {
+    control.checked = Boolean(settings[control.dataset.demoToggle]);
+  });
+
+  const duration = document.querySelector('[data-demo-range="notificationDuration"]');
+  if (duration) {
+    duration.value = String(settings.notificationDuration);
+    setDemoRangeProgress(duration, settings.notificationDuration);
+    const output = document.querySelector(`output[for="${duration.id}"]`);
+    if (output) output.textContent = `${settings.notificationDuration} sec`;
+  }
+
+  document.querySelectorAll("[data-demo-volume]").forEach((control) => {
+    control.value = String(settings.volume);
+    setDemoRangeProgress(control, settings.volume);
+  });
+  document.querySelectorAll('[data-demo-volume-output], output[for="demo-volume"]').forEach((output) => {
+    output.textContent = settings.muted ? "0" : `${settings.volume}${output.hasAttribute("data-demo-volume-output") ? "" : "%"}`;
+  });
+  document.querySelectorAll("[data-demo-volume-mute]").forEach((button) => {
+    button.classList.toggle("is-muted", settings.muted);
+    button.setAttribute("aria-pressed", String(settings.muted));
+    button.setAttribute("aria-label", settings.muted ? "Unmute preview volume" : "Mute preview volume");
+  });
+
+  elements.demoDesktop?.classList.toggle("notification-bottom", settings.notificationPosition === "bottom");
+  elements.notificationPreview?.classList.toggle("is-compact", settings.notificationDensity === "compact");
+  elements.audioPreview?.classList.toggle("is-compact", settings.audioLayout === "compact");
+
+  const actions = document.querySelector("[data-notification-actions]");
+  if (actions) actions.hidden = !settings.notificationActions;
+  const durationLabel = document.querySelector("[data-notification-duration-label]");
+  if (durationLabel) durationLabel.textContent = `${settings.notificationDuration} second preview`;
+  const device = document.querySelector("[data-audio-device]");
+  if (device) device.hidden = !settings.showOutputDevice;
+  const media = document.querySelector("[data-audio-media]");
+  if (media) media.hidden = settings.audioLayout !== "expanded" || !settings.showMediaControls;
+  renderDemoMediaState();
+}
+
+function setDemoRangeProgress(control, value) {
+  const minimum = Number(control.min);
+  const maximum = Number(control.max);
+  const progress = maximum > minimum ? ((value - minimum) / (maximum - minimum)) * 100 : 0;
+  control.style.setProperty("--range-progress", `${Math.max(0, Math.min(100, progress))}%`);
+}
+
+function replayDemoSurface(element) {
+  if (!element) return;
+  element.classList.remove("is-hidden", "is-replaying");
+  void element.offsetWidth;
+  element.classList.add("is-replaying");
+  window.setTimeout(() => element.classList.remove("is-replaying"), 260);
+}
+
+function showDemoNotification() {
+  window.clearTimeout(runtime.demoNotificationTimer);
+  replayDemoSurface(elements.notificationPreview);
+  runtime.demoNotificationTimer = window.setTimeout(
+    dismissDemoNotification,
+    runtime.demo.notificationDuration * 1000
+  );
+}
+
+function dismissDemoNotification() {
+  window.clearTimeout(runtime.demoNotificationTimer);
+  runtime.demoNotificationTimer = 0;
+  elements.notificationPreview?.classList.add("is-hidden");
+}
+
+function showDemoAudio() {
+  replayDemoSurface(elements.audioPreview);
+}
+
+function toggleDemoMedia() {
+  runtime.demoMediaPlaying = !runtime.demoMediaPlaying;
+  renderDemoMediaState();
+}
+
+function renderDemoMediaState() {
+  const button = document.querySelector("[data-demo-media-toggle]");
+  if (!button) return;
+  button.classList.toggle("is-playing", runtime.demoMediaPlaying);
+  button.setAttribute("aria-label", runtime.demoMediaPlaying ? "Pause demo media" : "Play demo media");
+  button.querySelector("use")?.setAttribute("href", runtime.demoMediaPlaying ? "#i-pause" : "#i-play");
 }
 
 function bindColorControl(target, customizationId) {
@@ -372,6 +805,7 @@ function applySettings(settings) {
     taskbarHideShowDesktop: settings.taskbarHideShowDesktop,
     taskbarCapsuleEnabled: settings.taskbarCapsuleEnabled,
     startHideRecommended: settings.startMenuHideRecommended,
+    startThreePanelLayoutEnabled: settings.startMenuThreePanelLayoutEnabled,
     taskbarBackgroundColorEnabled: settings.taskbarBackgroundColorEnabled,
     explorerBackgroundColorEnabled: settings.fileExplorerBackgroundColorEnabled,
     explorerCustomScrollbarEnabled: settings.fileExplorerCustomScrollbarEnabled,
@@ -431,9 +865,10 @@ function updateControlAvailability() {
   document.querySelectorAll("[data-policy-toggle]").forEach((control) => {
     const pending = runtime.pending.has(`policy:${control.dataset.policyToggle}`);
     const settings = runtime.state?.settings;
-    const available = Boolean(
-      settings?.startMenuHideAllAppsSupported && settings?.startMenuHideAllAppsEditable
-    );
+    const threePanel = Boolean(settings?.startMenuThreePanelLayoutEnabled);
+    const available = threePanel
+      ? connected && settings?.startMenuHideAllAppsEditable
+      : settings?.startMenuHideAllAppsSupported && settings?.startMenuHideAllAppsEditable;
     control.disabled = pending || !available;
     control.title = settings?.startMenuHideAllAppsDetail || "Windows policy unavailable";
   });
@@ -545,6 +980,7 @@ function start() {
   buildStaticCards();
   bindNavigation();
   bindControls();
+  renderDemoSettings();
   updateControlAvailability();
   if (!invoke) {
     applyConnection(false, "Tauri IPC is unavailable");
@@ -554,6 +990,7 @@ function start() {
   }
   refreshState(true);
   schedulePolling();
+  initializePortableUpdates();
 }
 
 start();

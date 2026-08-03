@@ -39,6 +39,15 @@ loop. The frontend polls immutable snapshots, updates existing DOM nodes, and
 never owns process handles or injection details. Closing the UI does not stop
 the host, so customizations do not depend on an open window.
 
+The only outbound runtime network path is the portable update client. It reads
+bounded assets from the project's GitHub Releases channel, verifies the
+Ed25519-signed manifest before trusting its package metadata, and verifies the
+complete ZIP SHA-256 before staging. Installation runs from a copied helper,
+requires explicit user confirmation, stops the host through an acknowledged IPC
+transaction, briefly restarts the current-session shell to release the agent
+DLL, and replaces the exact five-file runtime with rollback copies. See
+[Portable updates](UPDATES.md).
+
 ### Protocol and transport
 
 The UI and CLI use a fixed little-endian binary protocol. Each frame contains a

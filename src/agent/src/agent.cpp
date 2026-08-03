@@ -114,7 +114,12 @@ bool IsValidConfiguration(const AgentConfiguration* configuration) noexcept {
         configuration->start_menu_hide_recommended > 1 ||
         configuration->taskbar_background_color_enabled > 1 ||
         configuration->file_explorer_background_color_enabled > 1 ||
-        configuration->start_menu_background_color_enabled > 1) {
+        configuration->start_menu_background_color_enabled > 1 ||
+        configuration->start_menu_three_panel_layout_enabled > 1 ||
+        configuration->start_menu_hide_all_apps > 1 ||
+        std::ranges::any_of(
+            configuration->reserved_tail,
+            [](const std::uint8_t value) { return value != 0; })) {
         return false;
     }
     if (configuration->target != AgentTarget::explorer_shell &&
@@ -129,14 +134,16 @@ bool IsValidConfiguration(const AgentConfiguration* configuration) noexcept {
         AgentFeature::agent_feature_file_explorer_background_color |
         AgentFeature::agent_feature_start_menu_background_color |
         AgentFeature::agent_feature_file_explorer_custom_scrollbar |
-        AgentFeature::agent_feature_taskbar_capsule;
+        AgentFeature::agent_feature_taskbar_capsule |
+        AgentFeature::agent_feature_start_menu_three_panel_layout;
     if ((configuration->feature_flags & ~known_features) != 0) {
         return false;
     }
     if (configuration->target == AgentTarget::explorer_shell &&
         (configuration->feature_flags &
          (AgentFeature::agent_feature_start_menu_root_opacity |
-          AgentFeature::agent_feature_start_menu_background_color)) != 0) {
+          AgentFeature::agent_feature_start_menu_background_color |
+          AgentFeature::agent_feature_start_menu_three_panel_layout)) != 0) {
         return false;
     }
     if (configuration->target == AgentTarget::start_menu &&
@@ -194,7 +201,9 @@ metaplasia::agent::ShellXamlSettings ShellXamlSettingsFrom(
         configuration.start_menu_opacity_milli,
         configuration.start_menu_hide_recommended != 0,
         configuration.start_menu_background_color_enabled != 0,
-        configuration.start_menu_background_color};
+        configuration.start_menu_background_color,
+        configuration.start_menu_three_panel_layout_enabled != 0,
+        configuration.start_menu_hide_all_apps != 0};
 }
 
 bool IsTaskbarCaller(const void* return_address) noexcept {
@@ -614,7 +623,8 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
         const bool start_menu_xaml_required =
             start_menu_opacity_required ||
             (configuration.feature_flags &
-             AgentFeature::agent_feature_start_menu_background_color) != 0;
+             (AgentFeature::agent_feature_start_menu_background_color |
+              AgentFeature::agent_feature_start_menu_three_panel_layout)) != 0;
         const AgentResult result = metaplasia::agent::ConfigureShellXaml(
             configuration.target,
             start_menu_xaml_required,

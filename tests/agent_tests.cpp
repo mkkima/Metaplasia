@@ -250,6 +250,33 @@ int wmain(const int argc, wchar_t** argv) {
             static_cast<std::uint32_t>(AgentResult::invalid_configuration),
         "reject non-boolean Taskbar capsule field");
 
+    invalid_configuration = ExplorerConfiguration(
+        AgentFeature::agent_feature_none,
+        L"");
+    invalid_configuration.start_menu_three_panel_layout_enabled = 2;
+    Require(
+        start(&invalid_configuration) ==
+            static_cast<std::uint32_t>(AgentResult::invalid_configuration),
+        "reject non-boolean Start layout field");
+
+    invalid_configuration = ExplorerConfiguration(
+        AgentFeature::agent_feature_none,
+        L"");
+    invalid_configuration.start_menu_hide_all_apps = 2;
+    Require(
+        start(&invalid_configuration) ==
+            static_cast<std::uint32_t>(AgentResult::invalid_configuration),
+        "reject non-boolean All apps visibility field");
+
+    invalid_configuration = ExplorerConfiguration(
+        AgentFeature::agent_feature_none,
+        L"");
+    invalid_configuration.reserved_tail[1] = 1;
+    Require(
+        start(&invalid_configuration) ==
+            static_cast<std::uint32_t>(AgentResult::invalid_configuration),
+        "reject a non-zero reserved Agent ABI byte");
+
     auto configuration = ExplorerConfiguration(
         AgentFeature::agent_feature_file_explorer_title_prefix,
         L"Test · ");

@@ -39,6 +39,7 @@ int main() {
     Require(static_cast<bool>(stop_event), "create server stop event");
 
     std::atomic<std::uint32_t> handled{0};
+    std::atomic<std::uint32_t> acknowledged{0};
     NamedPipeServer server(
         pipe_name,
         [&handled](const Frame& request) -> metaplasia::Result<Frame> {
@@ -47,6 +48,14 @@ int main() {
             response.header.kind = MessageKind::command_response;
             response.header.request_id = request.header.request_id;
             return response;
+        },
+        [&acknowledged](const Frame& request,
+                        const Frame& response,
+                        const bool was_acknowledged) {
+            if (was_acknowledged &&
+                request.header.request_id == response.header.request_id) {
+                acknowledged.fetch_add(1, std::memory_order_relaxed);
+            }
         });
 
     metaplasia::Status server_status;
@@ -70,12 +79,21 @@ int main() {
             "preserve request id across reconnect");
     }
 
+    const auto acknowledgement_deadline =
+        std::chrono::steady_clock::now() + 2s;
+    while (acknowledged.load(std::memory_order_relaxed) < transaction_count &&
+           std::chrono::steady_clock::now() < acknowledgement_deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
     ::SetEvent(stop_event.get());
     server_thread.join();
     Require(server_status.ok(), "stop named-pipe server cleanly");
     Require(
         handled.load(std::memory_order_relaxed) == transaction_count,
         "handle each acknowledged request exactly once");
+    Require(
+        acknowledged.load(std::memory_order_relaxed) == transaction_count,
+        "observe each transaction only after its acknowledgement");
 
     std::cout << "Named-pipe transaction tests passed\n";
     return EXIT_SUCCESS;

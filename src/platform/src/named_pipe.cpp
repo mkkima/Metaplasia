@@ -372,8 +372,13 @@ Result<protocol::Frame> NamedPipeClient::Transact(
     }
 }
 
-NamedPipeServer::NamedPipeServer(std::wstring pipe_name, Handler handler)
-    : pipe_name_(std::move(pipe_name)), handler_(std::move(handler)) {}
+NamedPipeServer::NamedPipeServer(
+    std::wstring pipe_name,
+    Handler handler,
+    TransactionObserver transaction_observer)
+    : pipe_name_(std::move(pipe_name)),
+      handler_(std::move(handler)),
+      transaction_observer_(std::move(transaction_observer)) {}
 
 Result<void> NamedPipeServer::Run(const HANDLE stop_event) {
     if (stop_event == nullptr || stop_event == INVALID_HANDLE_VALUE) {
@@ -494,10 +499,13 @@ Result<void> NamedPipeServer::Run(const HANDLE stop_event) {
                       << write_response.status().message() << '\n';
         }
 #endif
+        bool acknowledged = false;
         if (write_response.ok()) {
             std::array<std::byte, 1> acknowledgement{};
             auto read_acknowledgement =
                 ReadExact(pipe.get(), acknowledgement, stop_event);
+            acknowledged = read_acknowledgement.ok() &&
+                acknowledgement.front() == kTransactionAcknowledgement;
 #ifndef NDEBUG
             if (read_acknowledgement.ok() &&
                 acknowledgement.front() != kTransactionAcknowledgement) {
@@ -510,6 +518,10 @@ Result<void> NamedPipeServer::Run(const HANDLE stop_event) {
             }
         }
         ::DisconnectNamedPipe(pipe.get());
+        if (transaction_observer_) {
+            transaction_observer_(
+                request.value(), response_frame, acknowledged);
+        }
     }
     return {};
 }

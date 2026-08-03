@@ -34,6 +34,8 @@ struct ShellXamlSettings final {
     bool start_menu_background_color_enabled{false};
     std::uint32_t start_menu_background_color{
         protocol::kDefaultShellBackgroundColor};
+    bool start_menu_three_panel_layout_enabled{false};
+    bool start_menu_hide_all_apps{false};
 };
 
 [[nodiscard]] protocol::AgentResult ConfigureShellXaml(

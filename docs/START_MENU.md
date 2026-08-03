@@ -65,10 +65,46 @@ or use private symbols. It also does not attempt to treat a
 `Microsoft.UI.Xaml` object as a `Windows.UI.Xaml` object. WinUI 3 support will be
 a separate adapter with its own compatibility evidence.
 
+## Three-panel layout
+
+The optional **Three-panel Start** control keeps Windows' native Pinned,
+Recommended, and footer controls, while the left panel presents the operating
+system's `shell:AppsFolder` inventory in a scrollable alphabetical list. Each
+left-panel row activates the corresponding shell item; launch work is deferred
+until after the XAML click event returns so closing Start cannot invalidate an
+in-flight event dispatch. The layout is enabled only together with the Start
+target. It hides the native search toggle, expands the verified Start frame to
+1246 by 624 device-independent pixels, and creates three rounded panels from
+the native acrylic brush.
+
+The adapter accepts only the current `StartMenu.StartBlendedFlexFrame` visual
+contract and the exact named container chain observed on the certified Windows
+build. Relation checks distinguish the main Start acrylic surfaces from
+same-named companion surfaces before applying the layout. Width, height,
+margin, alignment, grid position, visibility, opacity, original parent, and
+child index are captured before mutation. Disable restores those values in
+dependency order; a failed restoration keeps its snapshot so a later
+configuration pass can retry.
+
+In Three-panel mode, **Hide All apps content** changes only the visibility of
+the injected list. The left panel and the full three-panel frame stay attached,
+so the setting can be changed live without restarting Start or changing the
+layout width. Windows' legacy `NoStartMenuMorePrograms` policy is reserved for
+the native Start layout because that policy constrains the top-level popup to
+the native width and would clip the injected center and right panels. When a
+Metaplasia-owned policy from an earlier build is detected while enabling or
+editing Three-panel mode, the control center removes it once through the
+elevated policy helper and persists the equivalent injected setting.
+
+**Hide Recommended** still controls the native right-panel content. The
+current geometry is intended for a 1920 by 1080 desktop at 100% scaling;
+smaller effective work areas require a future responsive layout rather than
+unsafe clipping.
+
 ## Empty All apps section
 
-The control center exposes the operating system's documented "Remove All
-Programs list" policy separately from XAML injection. Metaplasia uses the
+For the native Start layout, the control center uses the operating system's
+documented "Remove All Programs list" policy. Metaplasia writes the
 device-scope DWORD
 `HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer\NoStartMenuMorePrograms=1`,
 which maps to "Remove and disable setting" in `StartMenu.admx`. This removes

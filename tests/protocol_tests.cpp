@@ -20,6 +20,22 @@ void Require(const bool condition, const char* message) {
 int main() {
     using namespace metaplasia::protocol;
 
+    static_assert(kProtocolVersion == 9);
+    const FrameHeader prepare_update_header{
+        MessageKind::prepare_update_request,
+        7,
+        0};
+    auto encoded_prepare_update = EncodeFrameHeader(prepare_update_header);
+    Require(encoded_prepare_update.ok(), "prepare-update header encode");
+    auto decoded_prepare_update =
+        DecodeFrameHeader(encoded_prepare_update.value());
+    Require(
+        decoded_prepare_update.ok() &&
+            decoded_prepare_update.value().kind ==
+                MessageKind::prepare_update_request &&
+            decoded_prepare_update.value().payload_size == 0,
+        "prepare-update header roundtrip");
+
     const SetEnabledRequest command{TargetId::taskbar, true};
     auto encoded_command = EncodeSetEnabledRequest(command);
     Require(encoded_command.ok(), "set-enabled encode");
@@ -48,6 +64,8 @@ int main() {
     settings.start_menu_hide_recommended = true;
     settings.start_menu_background_color_enabled = true;
     settings.start_menu_background_color = 0xFF708090U;
+    settings.start_menu_three_panel_layout_enabled = true;
+    settings.start_menu_hide_all_apps = true;
     auto encoded_settings = EncodeSettingsResponse(settings);
     Require(encoded_settings.ok(), "settings encode");
     auto decoded_settings = DecodeSettingsResponse(encoded_settings.value());
@@ -82,6 +100,10 @@ int main() {
             decoded_settings.value().start_menu_background_color ==
                 0xFF708090U,
         "independent shell colors roundtrip");
+    Require(
+        decoded_settings.value().start_menu_three_panel_layout_enabled &&
+            decoded_settings.value().start_menu_hide_all_apps,
+        "three-panel Start settings roundtrip");
 
     const SetCustomizationRequest prefix_command{
         CustomizationId::taskbar_clock_prefix,
@@ -206,6 +228,40 @@ int main() {
     Require(
         decoded_scrollbar.ok() && decoded_scrollbar.value().boolean_value,
         "Explorer scrollbar command roundtrip");
+
+    const SetCustomizationRequest start_layout_command{
+        CustomizationId::start_menu_three_panel_layout_enabled,
+        {},
+        0,
+        true};
+    auto encoded_start_layout =
+        EncodeSetCustomizationRequest(start_layout_command);
+    Require(encoded_start_layout.ok(), "Start layout command encode");
+    auto decoded_start_layout = DecodeSetCustomizationRequest(
+        encoded_start_layout.value());
+    Require(
+        decoded_start_layout.ok() &&
+            decoded_start_layout.value().customization ==
+                CustomizationId::start_menu_three_panel_layout_enabled &&
+            decoded_start_layout.value().boolean_value,
+        "Start layout command roundtrip");
+
+    const SetCustomizationRequest hide_all_apps_command{
+        CustomizationId::start_menu_hide_all_apps,
+        {},
+        0,
+        true};
+    auto encoded_hide_all_apps =
+        EncodeSetCustomizationRequest(hide_all_apps_command);
+    Require(encoded_hide_all_apps.ok(), "All apps command encode");
+    auto decoded_hide_all_apps = DecodeSetCustomizationRequest(
+        encoded_hide_all_apps.value());
+    Require(
+        decoded_hide_all_apps.ok() &&
+            decoded_hide_all_apps.value().customization ==
+                CustomizationId::start_menu_hide_all_apps &&
+            decoded_hide_all_apps.value().boolean_value,
+        "All apps command roundtrip");
 
     Require(
         !EncodeSetCustomizationRequest(

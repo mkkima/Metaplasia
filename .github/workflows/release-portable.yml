@@ -1,0 +1,233 @@
+name: Release signed portable update
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: portable-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, sign, and publish
+    runs-on: windows-2025
+    environment: release
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Validate release flag, versions, and secrets
+        id: version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$') {
+            throw "Release tags must use canonical stable SemVer: v1.2.3"
+          }
+          $version = $Matches.version
+          $cmake = Get-Content -Raw 'CMakeLists.txt'
+          if ($cmake -notmatch 'project\(Metaplasia VERSION (?<version>[0-9]+\.[0-9]+\.[0-9]+)') {
+            throw 'Could not read the CMake project version.'
+          }
+          $cmakeVersion = $Matches.version
+          $cargoLine = Select-String -Path 'src-tauri/Cargo.toml' -Pattern '^version = "([0-9]+\.[0-9]+\.[0-9]+)"$' | Select-Object -First 1
+          if (-not $cargoLine) { throw 'Could not read the Cargo package version.' }
+          $cargoVersion = $cargoLine.Matches[0].Groups[1].Value
+          $tauriVersion = (Get-Content -Raw 'src-tauri/tauri.conf.json' | ConvertFrom-Json).version
+          foreach ($candidate in @($cmakeVersion, $cargoVersion, $tauriVersion)) {
+            if ($candidate -ne $version) {
+              throw "Tag $tag does not match every project version (CMake=$cmakeVersion, Cargo=$cargoVersion, Tauri=$tauriVersion)."
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Configure, build, and test the complete portable application
+        shell: pwsh
+        env:
+          METAPLASIA_UPDATE_PUBLIC_KEY: ${{ secrets.METAPLASIA_UPDATE_PUBLIC_KEY }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:METAPLASIA_UPDATE_PUBLIC_KEY)) {
+            throw 'Required GitHub Actions secret METAPLASIA_UPDATE_PUBLIC_KEY is not configured.'
+          }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            throw 'vswhere.exe was not found on the GitHub runner.'
+          }
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw 'A supported MSVC toolchain was not found.' }
+          $devShell = Join-Path $installation 'Common7\Tools\Launch-VsDevShell.ps1'
+          if (-not (Test-Path -LiteralPath $devShell -PathType Leaf)) {
+            throw 'The Visual Studio developer shell was not found.'
+          }
+          & $devShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          cmake --preset windows-msvc-release
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
+          cmake --build --preset windows-msvc-release
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+          ctest --preset windows-msvc-release
+          if ($LASTEXITCODE -ne 0) { throw 'Release tests failed.' }
+
+      - name: Materialize and validate signing keys
+        id: tools
+        shell: pwsh
+        env:
+          METAPLASIA_UPDATE_PUBLIC_KEY: ${{ secrets.METAPLASIA_UPDATE_PUBLIC_KEY }}
+          METAPLASIA_UPDATE_PRIVATE_KEY_PEM_B64: ${{ secrets.METAPLASIA_UPDATE_PRIVATE_KEY_PEM_B64 }}
+          METAPLASIA_CODESIGN_PFX_B64: ${{ secrets.METAPLASIA_CODESIGN_PFX_B64 }}
+          METAPLASIA_CODESIGN_PASSWORD: ${{ secrets.METAPLASIA_CODESIGN_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @(
+            'METAPLASIA_UPDATE_PUBLIC_KEY',
+            'METAPLASIA_UPDATE_PRIVATE_KEY_PEM_B64',
+            'METAPLASIA_CODESIGN_PFX_B64',
+            'METAPLASIA_CODESIGN_PASSWORD'
+          )) {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) {
+              throw "Required GitHub Actions secret $name is not configured."
+            }
+          }
+          $privateKey = Join-Path $env:RUNNER_TEMP 'metaplasia-update-private.pem'
+          $certificate = Join-Path $env:RUNNER_TEMP 'metaplasia-codesign.pfx'
+          [IO.File]::WriteAllBytes($privateKey, [Convert]::FromBase64String($env:METAPLASIA_UPDATE_PRIVATE_KEY_PEM_B64))
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:METAPLASIA_CODESIGN_PFX_B64))
+
+          $openssl = (Get-Command openssl -ErrorAction SilentlyContinue).Source
+          if (-not $openssl) {
+            $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe'
+          }
+          if (-not (Test-Path -LiteralPath $openssl -PathType Leaf)) {
+            throw 'OpenSSL was not found on the GitHub runner.'
+          }
+          $publicDer = Join-Path $env:RUNNER_TEMP 'metaplasia-update-public.der'
+          & $openssl pkey -in $privateKey -pubout -outform DER -out $publicDer
+          if ($LASTEXITCODE -ne 0) { throw 'The update private key is invalid.' }
+          $publicBytes = [IO.File]::ReadAllBytes($publicDer)
+          if ($publicBytes.Length -lt 32) { throw 'The derived Ed25519 public key is invalid.' }
+          $rawPublic = $publicBytes[($publicBytes.Length - 32)..($publicBytes.Length - 1)]
+          $derivedPublic = [Convert]::ToBase64String($rawPublic)
+          if ($derivedPublic -cne $env:METAPLASIA_UPDATE_PUBLIC_KEY.Trim()) {
+            throw 'METAPLASIA_UPDATE_PUBLIC_KEY does not match the private update key.'
+          }
+
+          $signtool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw 'signtool.exe was not found on the GitHub runner.' }
+          "private_key=$privateKey" >> $env:GITHUB_OUTPUT
+          "public_der=$publicDer" >> $env:GITHUB_OUTPUT
+          "certificate=$certificate" >> $env:GITHUB_OUTPUT
+          "openssl=$openssl" >> $env:GITHUB_OUTPUT
+          "signtool=$signtool" >> $env:GITHUB_OUTPUT
+
+      - name: Authenticode-sign every executable component
+        shell: pwsh
+        env:
+          METAPLASIA_CODESIGN_PASSWORD: ${{ secrets.METAPLASIA_CODESIGN_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'build/release/bin/metaplasia.exe',
+            'build/release/bin/metaplasia-host.exe',
+            'build/release/bin/metaplasia-watchdog.exe',
+            'build/release/bin/metaplasia-cli.exe',
+            'build/release/bin/metaplasia-agent.dll'
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release component: $file" }
+            & '${{ steps.tools.outputs.signtool }}' sign /fd SHA256 /td SHA256 /tr 'http://timestamp.digicert.com' /f '${{ steps.tools.outputs.certificate }}' /p $env:METAPLASIA_CODESIGN_PASSWORD $file
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $file" }
+            & '${{ steps.tools.outputs.signtool }}' verify /pa /v $file
+            if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for $file" }
+          }
+
+      - name: Create and sign portable release assets
+        id: assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = '${{ steps.version.outputs.tag }}'
+          $output = Join-Path $PWD 'release-assets'
+          $payload = Join-Path $env:RUNNER_TEMP 'metaplasia-portable-payload'
+          New-Item -ItemType Directory -Path $output, $payload | Out-Null
+          $names = @('metaplasia.exe', 'metaplasia-host.exe', 'metaplasia-watchdog.exe', 'metaplasia-cli.exe', 'metaplasia-agent.dll')
+          foreach ($name in $names) {
+            Copy-Item -LiteralPath (Join-Path 'build/release/bin' $name) -Destination (Join-Path $payload $name)
+          }
+          $zipName = "Metaplasia-$version-windows-x64-portable.zip"
+          $zip = Join-Path $output $zipName
+          Compress-Archive -LiteralPath ($names | ForEach-Object { Join-Path $payload $_ }) -DestinationPath $zip -CompressionLevel Optimal
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath $zip).Length
+          $manifestPath = Join-Path $output 'portable-update.json'
+          $manifest = [ordered]@{
+            schema = 1
+            version = $version
+            published_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            notes = "Metaplasia $version. See the GitHub release notes for changes."
+            package = [ordered]@{
+              url = "https://github.com/mkkima/Metaplasia/releases/download/$tag/$zipName"
+              sha256 = $hash
+              size = $size
+            }
+          }
+          $json = $manifest | ConvertTo-Json -Depth 4 -Compress
+          [IO.File]::WriteAllText($manifestPath, $json, [Text.UTF8Encoding]::new($false))
+          $signaturePath = Join-Path $output 'portable-update.json.sig'
+          & '${{ steps.tools.outputs.openssl }}' pkeyutl -sign -rawin -inkey '${{ steps.tools.outputs.private_key }}' -in $manifestPath -out $signaturePath
+          if ($LASTEXITCODE -ne 0) { throw 'Update manifest signing failed.' }
+          & '${{ steps.tools.outputs.openssl }}' pkeyutl -verify -pubin -inkey '${{ steps.tools.outputs.public_der }}' -keyform DER -rawin -in $manifestPath -sigfile $signaturePath
+          if ($LASTEXITCODE -ne 0) { throw 'Update manifest signature verification failed.' }
+          "$hash  $zipName" | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding ascii -NoNewline
+          "directory=$output" >> $env:GITHUB_OUTPUT
+
+      - name: Remove private signing material
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($path in @(
+            '${{ steps.tools.outputs.private_key }}',
+            '${{ steps.tools.outputs.public_der }}',
+            '${{ steps.tools.outputs.certificate }}'
+          )) {
+            if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+              Remove-Item -LiteralPath $path -Force
+            }
+          }
+
+      - name: Verify signed runtime and tests without signing secrets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & 'build/release/bin/metaplasia-cli.exe' component-trust
+          if ($LASTEXITCODE -ne 0) { throw 'The signed component set failed its runtime trust policy.' }
+          ctest --preset windows-msvc-release
+          if ($LASTEXITCODE -ne 0) { throw 'Release tests failed after Authenticode signing.' }
+
+      - name: Publish tagged GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = '${{ steps.assets.outputs.directory }}'
+          gh release create '${{ steps.version.outputs.tag }}' `
+            (Join-Path $assets "Metaplasia-${{ steps.version.outputs.version }}-windows-x64-portable.zip") `
+            (Join-Path $assets 'portable-update.json') `
+            (Join-Path $assets 'portable-update.json.sig') `
+            (Join-Path $assets 'SHA256SUMS.txt') `
+            --verify-tag `
+            --generate-notes `
+            --title "Metaplasia ${{ steps.version.outputs.version }}"

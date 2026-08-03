@@ -120,7 +120,9 @@ The signing pipeline must:
    CLI, UI, and any compatibility pack with one leaf signer certificate;
 3. timestamp signatures according to the release policy;
 4. run `component-trust` and the Release tests on the signed artifacts;
-5. install into an ACL-hardened directory and never mutate a loaded agent.
+5. sign the portable update manifest with the separate Ed25519 release key;
+6. stage and transactionally replace the complete portable set, never mutating
+   an agent while it remains loaded in a shell process.
 
 ## Win32 references
 

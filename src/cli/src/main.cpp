@@ -97,6 +97,8 @@ void PrintUsage() {
         << "  metaplasia-cli set start-menu-color <#RRGGBB>\n"
         << "  metaplasia-cli set start-menu-color-enabled <true|false>\n"
         << "  metaplasia-cli set start-menu-hide-recommended <true|false>\n"
+        << "  metaplasia-cli set start-menu-hide-all-apps <true|false>\n"
+        << "  metaplasia-cli set start-menu-three-panel-layout-enabled <true|false>\n"
         << "  metaplasia-cli enable <taskbar|file-explorer|start-menu> --confirm\n"
         << "  metaplasia-cli disable <taskbar|file-explorer|start-menu>\n"
         << "  metaplasia-cli module-info <absolute-module-path>\n"
@@ -642,6 +644,14 @@ int wmain(const int argc, wchar_t** argv) {
             << (settings.value().start_menu_hide_recommended
                     ? "true"
                     : "false")
+            << '\n'
+            << "start-menu-three-panel-layout-enabled="
+            << (settings.value().start_menu_three_panel_layout_enabled
+                    ? "true"
+                    : "false")
+            << '\n'
+            << "start-menu-hide-all-apps="
+            << (settings.value().start_menu_hide_all_apps ? "true" : "false")
             << '\n';
         return 0;
     }
@@ -784,7 +794,9 @@ int wmain(const int argc, wchar_t** argv) {
             setting == L"taskbar-color-enabled" ||
             setting == L"explorer-color-enabled" ||
             setting == L"explorer-custom-scrollbar-enabled" ||
-            setting == L"start-menu-color-enabled") {
+            setting == L"start-menu-color-enabled" ||
+            setting == L"start-menu-three-panel-layout-enabled" ||
+            setting == L"start-menu-hide-all-apps") {
             const auto hidden = ParseBooleanValue(argv[3]);
             if (!hidden.has_value()) {
                 std::cerr << "Visibility setting must be true or false\n";
@@ -819,6 +831,13 @@ int wmain(const int argc, wchar_t** argv) {
             } else if (setting == L"explorer-custom-scrollbar-enabled") {
                 command.customization = metaplasia::protocol::CustomizationId::
                     file_explorer_custom_scrollbar_enabled;
+            } else if (
+                setting == L"start-menu-three-panel-layout-enabled") {
+                command.customization = metaplasia::protocol::CustomizationId::
+                    start_menu_three_panel_layout_enabled;
+            } else if (setting == L"start-menu-hide-all-apps") {
+                command.customization = metaplasia::protocol::CustomizationId::
+                    start_menu_hide_all_apps;
             } else {
                 command.customization = metaplasia::protocol::CustomizationId::
                     start_menu_background_color_enabled;

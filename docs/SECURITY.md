@@ -61,6 +61,14 @@ of use. A PID is never accepted as proof of process identity.
   same-user/session host identity, and sibling install/data path enforcement.
 - Cross-process recovery lease that blocks a replacement host until persistent
   safe mode and best-effort agent deactivation finish.
+- Portable updates trust only a bounded Ed25519-signed manifest embedded-key
+  channel, require an exact repository release URL, verify the full ZIP SHA-256
+  twice, and accept only the exact five top-level runtime filenames. Extraction
+  rejects traversal, directories, duplicates, links, and oversized content.
+- The update helper runs outside the portable directory, waits for the UI,
+  host, and watchdog to exit, restarts only the exact current-session shell,
+  stages on the target volume, and preserves rollback files if restoration is
+  incomplete. Installation requires explicit user confirmation.
 - Configure-only recovery API that cannot call `LoadLibraryW`; watchdog
   recovery never injects a clean process or terminates/restarts the shell.
 - No kernel driver, global hook, service, scheduled task, or elevation path.
@@ -101,9 +109,12 @@ identified.
   safe mode; the next host retries deactivation, and restarting that shell
   process or signing out clears the mapped DLL.
 - Development binaries are unsigned, so the current local Release output
-  intentionally refuses to start. A release pipeline must sign the component
-  set, and a production installer must place it in an ACL-hardened directory.
-  A user-writable install directory is not an integrity boundary.
+  intentionally refuses to start. The tag-only release workflow and updater
+  exist, but the repository signing secrets, protected tag rule, release
+  environment approval, and a clean end-to-end published update test must be
+  completed before calling the distribution production-ready. A portable,
+  user-writable directory is not an integrity boundary against the same user;
+  the signed channel protects transport and release provenance.
 - Multiple products hooking the same shell function have undefined ownership
   and teardown order. Metaplasia must not be enabled alongside another shell
   injector until coexistence is explicitly tested.

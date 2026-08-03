@@ -106,6 +106,8 @@ int main() {
     expected.start_menu_hide_recommended = true;
     expected.start_menu_background_color_enabled = true;
     expected.start_menu_background_color = 0xFF778899U;
+    expected.start_menu_three_panel_layout_enabled = true;
+    expected.start_menu_hide_all_apps = true;
     const auto saved = store.Save(expected);
     Require(saved.ok(), "atomically save settings");
 
@@ -156,6 +158,12 @@ int main() {
         loaded.value().start_menu_background_color_enabled &&
             loaded.value().start_menu_background_color == 0xFF778899U,
         "round-trip Start menu background color");
+    Require(
+        loaded.value().start_menu_three_panel_layout_enabled,
+        "round-trip three-panel Start layout");
+    Require(
+        loaded.value().start_menu_hide_all_apps,
+        "round-trip three-panel All apps visibility");
     for (const auto& entry :
          std::filesystem::directory_iterator(settings_path.parent_path())) {
         Require(
@@ -174,7 +182,7 @@ int main() {
         duplicate.status().code() == ErrorCode::invalid_data,
         "duplicate key reports invalid data");
 
-    WriteText(settings_path, "version=8\ntaskbar_enabled=1\n");
+    WriteText(settings_path, "version=10\ntaskbar_enabled=1\n");
     const auto future_version = store.Load();
     Require(!future_version.ok(), "unsupported version rejected");
     Require(
@@ -202,6 +210,20 @@ int main() {
     Require(
         !migrated_capsule.value().taskbar_capsule_enabled,
         "version 6 migrates to the native Taskbar shape");
+
+    WriteText(settings_path, "version=7\nstart_menu_enabled=1\n");
+    const auto migrated_three_panel = store.Load();
+    Require(migrated_three_panel.ok(), "version 7 Start layout migration");
+    Require(
+        !migrated_three_panel.value().start_menu_three_panel_layout_enabled,
+        "version 7 migrates to the native Start layout");
+
+    WriteText(settings_path, "version=8\nstart_menu_enabled=1\n");
+    const auto migrated_all_apps = store.Load();
+    Require(migrated_all_apps.ok(), "version 8 All apps migration");
+    Require(
+        !migrated_all_apps.value().start_menu_hide_all_apps,
+        "version 8 keeps the three-panel All apps list visible");
 
     WriteText(settings_path, "version=1\nstart_menu_enabled=yes\n");
     Require(!store.Load().ok(), "non-canonical boolean rejected");

@@ -1,3 +1,4 @@
+mod portable_update;
 mod protocol;
 mod start_menu_policy;
 
@@ -5,6 +6,7 @@ use protocol::{MessageKind, PipeClient, Reader, expect_kind, write_string, write
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewWindow};
@@ -16,6 +18,7 @@ const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 const DWMWA_BORDER_COLOR: u32 = 34;
 const DWMWA_CAPTION_COLOR: u32 = 35;
 const DWMWA_TEXT_COLOR: u32 = 36;
+static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[link(name = "dwmapi")]
 unsafe extern "system" {
@@ -63,7 +66,10 @@ struct Settings {
     start_menu_hide_recommended: bool,
     start_menu_background_color_enabled: bool,
     start_menu_background_color: u32,
+    start_menu_three_panel_layout_enabled: bool,
+    start_menu_three_panel_hide_all_apps: bool,
     start_menu_hide_all_apps: bool,
+    start_menu_hide_all_apps_policy_active: bool,
     start_menu_hide_all_apps_supported: bool,
     start_menu_hide_all_apps_editable: bool,
     start_menu_hide_all_apps_detail: String,
@@ -92,7 +98,10 @@ impl Default for Settings {
             start_menu_hide_recommended: false,
             start_menu_background_color_enabled: false,
             start_menu_background_color: 0xFF000000,
+            start_menu_three_panel_layout_enabled: false,
+            start_menu_three_panel_hide_all_apps: false,
             start_menu_hide_all_apps: false,
+            start_menu_hide_all_apps_policy_active: false,
             start_menu_hide_all_apps_supported: false,
             start_menu_hide_all_apps_editable: false,
             start_menu_hide_all_apps_detail: "Unable to inspect the Windows policy.".into(),
@@ -204,18 +213,51 @@ async fn set_customization(request: CustomizationRequest) -> Result<CommandResul
 }
 
 #[tauri::command]
-async fn set_start_all_apps_hidden(hidden: bool) -> Result<CommandResult, String> {
+async fn set_start_all_apps_hidden(
+    hidden: bool,
+    three_panel_enabled: bool,
+) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        start_menu_policy::set_hidden(hidden)?;
-        Ok(CommandResult {
-            accepted: true,
-            detail: if hidden {
-                "All apps content hidden. The Windows shell was refreshed."
-            } else {
-                "All apps content restored. The Windows shell was refreshed."
+        if three_panel_enabled {
+            let policy_was_active = start_menu_policy::query()?.hidden;
+            if policy_was_active {
+                // The device policy constrains Start's top-level popup to the
+                // native two-column width. Remove it before applying the
+                // injected three-panel visibility setting.
+                start_menu_policy::set_hidden(false)?;
             }
-            .into(),
-        })
+            let payload = encode_customization(CustomizationRequest {
+                id: "startHideAllApps".into(),
+                text_value: None,
+                integer_value: None,
+                boolean_value: Some(hidden),
+            })?;
+            let client = PipeClient::for_current_session().map_err(|error| error.to_string())?;
+            let frame = client
+                .transact(MessageKind::SetCustomizationRequest, &payload, PIPE_TIMEOUT)
+                .map_err(|error| error.to_string())?;
+            let mut result = parse_command_response(frame)?;
+            result.detail = if policy_was_active {
+                "The incompatible Windows policy was removed and the Three-panel All apps content was updated."
+            } else if hidden {
+                "Three-panel All apps content hidden."
+            } else {
+                "Three-panel All apps content restored."
+            }
+            .into();
+            Ok(result)
+        } else {
+            start_menu_policy::set_hidden(hidden)?;
+            Ok(CommandResult {
+                accepted: true,
+                detail: if hidden {
+                    "All apps content hidden. The Windows shell was refreshed."
+                } else {
+                    "All apps content restored. The Windows shell was refreshed."
+                }
+                .into(),
+            })
+        }
     })
     .await
     .map_err(|error| format!("Policy worker failed: {error}"))?
@@ -235,6 +277,11 @@ async fn get_xaml_diagnostics() -> Result<XamlDiagnostics, String> {
 }
 
 fn query_app_state() -> AppState {
+    if UPDATE_IN_PROGRESS.load(Ordering::Acquire) {
+        return disconnected_state(
+            "Portable update is preparing to restart the application".into(),
+        );
+    }
     match try_query_app_state() {
         Ok(state) => state,
         Err(first_error) => {
@@ -334,6 +381,8 @@ fn parse_settings(payload: &[u8]) -> Result<Settings, String> {
         start_menu_background_color: validated_color(
             reader.u32().map_err(|error| error.to_string())?,
         )?,
+        start_menu_three_panel_layout_enabled: read_bool(&mut reader)?,
+        start_menu_three_panel_hide_all_apps: read_bool(&mut reader)?,
         ..Settings::default()
     };
     reader.finish().map_err(|error| error.to_string())?;
@@ -484,6 +533,14 @@ fn encode_customization(request: CustomizationRequest) -> Result<Vec<u8>, String
             payload.push(16);
             payload.push(u8::from(validated_boolean(request)?));
         }
+        "startThreePanelLayoutEnabled" => {
+            payload.push(18);
+            payload.push(u8::from(validated_boolean(request)?));
+        }
+        "startHideAllApps" => {
+            payload.push(19);
+            payload.push(u8::from(validated_boolean(request)?));
+        }
         _ => return Err("Unknown customization".into()),
     }
     Ok(payload)
@@ -631,10 +688,25 @@ fn disconnected_state(detail: String) -> AppState {
 fn with_start_app_list_policy(mut settings: Settings) -> Settings {
     match start_menu_policy::query() {
         Ok(policy) => {
-            settings.start_menu_hide_all_apps = policy.hidden;
-            settings.start_menu_hide_all_apps_supported = policy.supported;
-            settings.start_menu_hide_all_apps_editable = policy.editable;
-            settings.start_menu_hide_all_apps_detail = policy.detail;
+            settings.start_menu_hide_all_apps_policy_active = policy.hidden;
+            if settings.start_menu_three_panel_layout_enabled {
+                settings.start_menu_hide_all_apps =
+                    settings.start_menu_three_panel_hide_all_apps || policy.hidden;
+                settings.start_menu_hide_all_apps_supported = true;
+                settings.start_menu_hide_all_apps_editable = !policy.hidden || policy.editable;
+                settings.start_menu_hide_all_apps_detail = if policy.hidden {
+                    "An incompatible Windows policy is still active. Change this switch once to migrate it to the Three-panel setting."
+                        .into()
+                } else {
+                    "Hide the custom All apps list while keeping the Three-panel Start geometry intact."
+                        .into()
+                };
+            } else {
+                settings.start_menu_hide_all_apps = policy.hidden;
+                settings.start_menu_hide_all_apps_supported = policy.supported;
+                settings.start_menu_hide_all_apps_editable = policy.editable;
+                settings.start_menu_hide_all_apps_detail = policy.detail;
+            }
         }
         Err(error) => {
             settings.start_menu_hide_all_apps = false;
@@ -743,12 +815,17 @@ fn apply_dark_window_frame(window: &WebviewWindow) {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(portable_update::UpdateManager::default())
         .invoke_handler(tauri::generate_handler![
             get_app_state,
             set_target_enabled,
             set_customization,
             set_start_all_apps_hidden,
-            get_xaml_diagnostics
+            get_xaml_diagnostics,
+            portable_update::get_portable_update_status,
+            portable_update::check_portable_update,
+            portable_update::download_portable_update,
+            portable_update::apply_portable_update
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -758,6 +835,10 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("failed to run Metaplasia");
+}
+
+pub fn run_portable_update_helper_from_args() -> Option<i32> {
+    portable_update::run_helper_from_args()
 }
 
 pub fn run_start_all_apps_policy_helper_from_args() -> Option<i32> {
@@ -893,5 +974,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(payload, vec![17, 1]);
+    }
+
+    #[test]
+    fn encodes_three_panel_start_layout_toggle() {
+        let payload = encode_customization(CustomizationRequest {
+            id: "startThreePanelLayoutEnabled".into(),
+            text_value: None,
+            integer_value: None,
+            boolean_value: Some(true),
+        })
+        .unwrap();
+        assert_eq!(payload, vec![18, 1]);
+    }
+
+    #[test]
+    fn encodes_three_panel_all_apps_toggle() {
+        let payload = encode_customization(CustomizationRequest {
+            id: "startHideAllApps".into(),
+            text_value: None,
+            integer_value: None,
+            boolean_value: Some(true),
+        })
+        .unwrap();
+        assert_eq!(payload, vec![19, 1]);
     }
 }

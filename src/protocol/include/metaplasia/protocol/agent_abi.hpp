@@ -7,7 +7,7 @@
 namespace metaplasia::protocol {
 
 inline constexpr std::uint32_t kAgentConfigMagic = 0x4741504D;  // "MPAG"
-inline constexpr std::uint16_t kAgentAbiVersion = 9;
+inline constexpr std::uint16_t kAgentAbiVersion = 11;
 inline constexpr std::size_t kMaximumClockPrefixLength = 15;
 inline constexpr std::size_t kMaximumExplorerTitlePrefixLength = 31;
 inline constexpr std::uint32_t kDefaultTaskbarOpacityMilli = 1000;
@@ -41,6 +41,7 @@ enum AgentFeature : std::uint32_t {
     agent_feature_start_menu_background_color = 1U << 5U,
     agent_feature_file_explorer_custom_scrollbar = 1U << 6U,
     agent_feature_taskbar_capsule = 1U << 7U,
+    agent_feature_start_menu_three_panel_layout = 1U << 8U,
 };
 
 enum class AgentResult : std::uint32_t {
@@ -101,10 +102,13 @@ struct AgentConfiguration final {
     std::uint32_t taskbar_background_color{kDefaultShellBackgroundColor};
     std::uint32_t file_explorer_background_color{kDefaultShellBackgroundColor};
     std::uint32_t start_menu_background_color{kDefaultShellBackgroundColor};
+    std::uint8_t start_menu_three_panel_layout_enabled{0};
+    std::uint8_t start_menu_hide_all_apps{0};
+    std::uint8_t reserved_tail[2]{};
 };
 
 static_assert(sizeof(wchar_t) == 2, "Agent ABI requires Windows UTF-16 wchar_t");
-static_assert(sizeof(AgentConfiguration) == 144);
+static_assert(sizeof(AgentConfiguration) == 148);
 
 using AgentEntryPoint = std::uint32_t(__stdcall*)(void* configuration);
 

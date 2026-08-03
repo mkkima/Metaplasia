@@ -544,6 +544,75 @@ fn refresh_shell_for_app_list_policy() -> Result<(), String> {
 }
 
 fn restart_explorer_shell() -> Result<(), String> {
+    stop_explorer_shell()?;
+    start_explorer_shell()
+}
+
+pub(crate) fn stop_shell_for_portable_update() -> Result<(), String> {
+    restart_start_menu_host()?;
+    stop_explorer_shell()
+}
+
+pub(crate) fn restart_explorer_after_portable_update() -> Result<(), String> {
+    start_explorer_shell()
+}
+
+pub(crate) fn current_session_processes_named(names: &[&str]) -> Result<Vec<String>, String> {
+    // SAFETY: no process-specific pointer data is passed to snapshot creation.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(format!(
+            "Could not enumerate background processes: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let snapshot = SnapshotHandle(snapshot);
+    let mut current_session = 0_u32;
+    // SAFETY: current_session is writable and the current PID is valid.
+    if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut current_session) } == 0 {
+        return Err(format!(
+            "Could not resolve the current Windows session: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let mut found = Vec::new();
+    let mut entry = ProcessEntry32W::default();
+    // SAFETY: entry has the required size and writable fixed storage.
+    let mut has_entry = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
+    while has_entry {
+        let length = entry
+            .executable
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(entry.executable.len());
+        let executable = String::from_utf16_lossy(&entry.executable[..length]);
+        if names
+            .iter()
+            .any(|name| executable.eq_ignore_ascii_case(name))
+        {
+            let mut process_session = u32::MAX;
+            // SAFETY: process_session points to writable storage.
+            if unsafe { ProcessIdToSessionId(entry.process_id, &mut process_session) } != 0
+                && process_session == current_session
+            {
+                found.push(format!("{executable} ({})", entry.process_id));
+            }
+        }
+        entry = ProcessEntry32W::default();
+        // SAFETY: entry is reset with the required size before enumeration.
+        has_entry = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
+    }
+    if std::io::Error::last_os_error().raw_os_error() != Some(ERROR_NO_MORE_FILES) {
+        return Err(format!(
+            "Background process enumeration failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(found)
+}
+
+fn stop_explorer_shell() -> Result<(), String> {
     let shell_class = wide("Shell_TrayWnd");
     // SAFETY: class_name is a valid null-terminated UTF-16 string and a null
     // title requests the unique shell taskbar window.
@@ -585,6 +654,11 @@ fn restart_explorer_shell() -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+fn start_explorer_shell() -> Result<(), String> {
+    let shell_class = wide("Shell_TrayWnd");
     // Explorer may auto-restart. Give it a short chance before explicitly
     // launching the system image to avoid duplicate shell instances.
     for _ in 0..10 {

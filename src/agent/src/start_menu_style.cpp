@@ -80,6 +80,171 @@ ShellGeometryRule IdentifyShellGeometryRule(
     return ShellGeometryRule::none;
 }
 
+StartMenuLayoutRule IdentifyStartMenuLayoutRule(
+    const protocol::AgentTarget target,
+    const std::wstring_view type_name,
+    const std::wstring_view element_name) noexcept {
+    if (target != protocol::AgentTarget::start_menu) {
+        return StartMenuLayoutRule::none;
+    }
+    if (type_name == L"StartMenu.StartBlendedFlexFrame" &&
+        element_name.empty()) {
+        return StartMenuLayoutRule::frame;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        (element_name == L"FrameRoot" ||
+         element_name == L"AnimationRoot" ||
+         element_name == L"MainMenu")) {
+        return StartMenuLayoutRule::frame_container;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Border" &&
+        element_name == L"StartDropShadow") {
+        return StartMenuLayoutRule::frame_shadow;
+    }
+    if (type_name == L"StartMenu.SearchBoxToggleButton" &&
+        element_name == L"SearchBoxToggleButton") {
+        return StartMenuLayoutRule::search_box;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"NavPanePlaceholder") {
+        return StartMenuLayoutRule::navigation_pane;
+    }
+    if (type_name == L"StartDocked.NavigationPaneView" &&
+        element_name == L"UserControl") {
+        return StartMenuLayoutRule::navigation_content;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"TopLevelHeader") {
+        return StartMenuLayoutRule::top_level_header;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"AllListHeading") {
+        return StartMenuLayoutRule::all_apps_heading;
+    }
+    // AllAppsGrid is also the native host for the pinned Start content on
+    // current Windows 11 builds. Moving or resizing it removes the pinned
+    // section from the centre panel. The independent All apps panel is built
+    // by the XAML adapter instead, so this native container must stay intact.
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"PinnedListHeaderGrid") {
+        return StartMenuLayoutRule::pinned_heading;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"ShowMorePinnedGrid") {
+        return StartMenuLayoutRule::pinned_more;
+    }
+    if (type_name == L"StartMenu.PinnedList" &&
+        element_name == L"StartMenuPinnedList") {
+        return StartMenuLayoutRule::pinned_list;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"TopLevelSuggestionsRoot") {
+        return StartMenuLayoutRule::recommended;
+    }
+    return StartMenuLayoutRule::none;
+}
+
+ShellElementLayout StartMenuLayoutFor(
+    const StartMenuLayoutRule rule) noexcept {
+    ShellElementLayout layout;
+    switch (rule) {
+        case StartMenuLayoutRule::frame:
+        case StartMenuLayoutRule::frame_container:
+            layout.width = kStartMenuThreePanelFrameWidth;
+            layout.height = kStartMenuThreePanelFrameHeight;
+            layout.horizontal_alignment = ShellHorizontalAlignment::center;
+            layout.vertical_alignment = ShellVerticalAlignment::bottom;
+            return layout;
+        case StartMenuLayoutRule::frame_shadow:
+            layout.write_size = false;
+            layout.write_margin = false;
+            layout.write_alignment = false;
+            layout.write_visibility = true;
+            layout.visible = false;
+            return layout;
+        case StartMenuLayoutRule::search_box:
+            layout.write_size = false;
+            layout.write_margin = false;
+            layout.write_alignment = false;
+            layout.write_visibility = true;
+            layout.visible = false;
+            return layout;
+        case StartMenuLayoutRule::navigation_pane:
+            layout.width = 280.0;
+            layout.height = 72.0;
+            layout.margin = {0.0, 0.0, 40.0, 30.0};
+            layout.horizontal_alignment = ShellHorizontalAlignment::right;
+            layout.vertical_alignment = ShellVerticalAlignment::bottom;
+            // The native placeholder occupies a short footer row. Cover the
+            // complete parent grid so that its native user tile is not clipped.
+            // XAML clamps an oversized span to the number of available rows.
+            layout.reset_grid_position = true;
+            layout.grid_row_span = 16;
+            return layout;
+        case StartMenuLayoutRule::navigation_content:
+            layout.width = 280.0;
+            layout.height = 72.0;
+            layout.horizontal_alignment = ShellHorizontalAlignment::left;
+            layout.vertical_alignment = ShellVerticalAlignment::top;
+            return layout;
+        case StartMenuLayoutRule::top_level_header:
+            layout.width = kStartMenuThreePanelFrameWidth;
+            layout.height = kStartMenuThreePanelPanelHeight;
+            layout.horizontal_alignment = ShellHorizontalAlignment::left;
+            layout.vertical_alignment = ShellVerticalAlignment::top;
+            layout.reset_grid_position = true;
+            return layout;
+        case StartMenuLayoutRule::all_apps_heading:
+            layout.width = 280.0;
+            layout.height = -1.0;
+            layout.margin = {40.0, 24.0, 0.0, 0.0};
+            layout.horizontal_alignment = ShellHorizontalAlignment::left;
+            layout.vertical_alignment = ShellVerticalAlignment::top;
+            layout.reset_grid_position = true;
+            return layout;
+        case StartMenuLayoutRule::all_apps_grid:
+            layout.write_size = false;
+            layout.write_margin = false;
+            layout.write_alignment = false;
+            return layout;
+        case StartMenuLayoutRule::pinned_heading:
+        case StartMenuLayoutRule::pinned_more:
+            layout.width = 528.0;
+            layout.height = -1.0;
+            layout.margin = {344.0, 24.0, 0.0, 0.0};
+            layout.horizontal_alignment = ShellHorizontalAlignment::left;
+            layout.vertical_alignment = ShellVerticalAlignment::top;
+            layout.reset_grid_position = true;
+            return layout;
+        case StartMenuLayoutRule::pinned_list:
+            layout.width = 528.0;
+            layout.height = kStartMenuThreePanelContentHeight;
+            layout.margin = {
+                344.0,
+                kStartMenuThreePanelContentTop,
+                0.0,
+                0.0};
+            layout.horizontal_alignment = ShellHorizontalAlignment::left;
+            layout.vertical_alignment = ShellVerticalAlignment::top;
+            layout.reset_grid_position = true;
+            return layout;
+        case StartMenuLayoutRule::recommended:
+            layout.width = 280.0;
+            layout.height = kStartMenuThreePanelRecommendedHeight;
+            layout.margin = {926.0, 24.0, 0.0, 0.0};
+            layout.horizontal_alignment = ShellHorizontalAlignment::left;
+            layout.vertical_alignment = ShellVerticalAlignment::top;
+            layout.reset_grid_position = true;
+            return layout;
+        case StartMenuLayoutRule::none:
+        default:
+            layout.write_size = false;
+            layout.write_margin = false;
+            layout.write_alignment = false;
+            return layout;
+    }
+}
+
 double CalculateTaskbarCapsuleOuterMargin(
     const double available_width) noexcept {
     if (!std::isfinite(available_width) ||
@@ -165,7 +330,9 @@ bool ShellXamlStyle::Configure(
     const std::uint32_t start_menu_opacity_milli,
     const bool hide_recommended,
     const bool start_menu_background_color_enabled,
-    const std::uint32_t start_menu_background_color) noexcept {
+    const std::uint32_t start_menu_background_color,
+    const bool start_menu_three_panel_layout_enabled,
+    const bool start_menu_hide_all_apps) noexcept {
     if ((target_ != protocol::AgentTarget::explorer_shell &&
          target_ != protocol::AgentTarget::start_menu) ||
         taskbar_opacity_milli < kMinimumTaskbarOpacityMilli ||
@@ -205,6 +372,12 @@ bool ShellXamlStyle::Configure(
     start_menu_background_color_.store(
         start_menu_background_color,
         std::memory_order_release);
+    start_menu_three_panel_layout_enabled_.store(
+        start_menu_three_panel_layout_enabled,
+        std::memory_order_release);
+    start_menu_hide_all_apps_.store(
+        start_menu_hide_all_apps,
+        std::memory_order_release);
     enabled_.store(enabled, std::memory_order_release);
     return true;
 }
@@ -230,6 +403,8 @@ HRESULT ShellXamlStyle::OnElementAdded(
             element_name);
     const ShellGeometryRule geometry_rule =
         IdentifyShellGeometryRule(target_, type_name, element_name);
+    const StartMenuLayoutRule start_menu_layout_rule =
+        IdentifyStartMenuLayoutRule(target_, type_name, element_name);
     const bool enabled = enabled_.load(std::memory_order_acquire);
     if (handle == 0 || !enabled) {
         return S_FALSE;
@@ -245,14 +420,29 @@ HRESULT ShellXamlStyle::OnElementAdded(
     if (FAILED(observe_result)) {
         return observe_result;
     }
+    const HRESULT start_menu_observe_result = ObserveStartMenuLayoutRelation(
+        handle,
+        type_name,
+        element_name,
+        parent_handle);
+    if (FAILED(start_menu_observe_result)) {
+        return start_menu_observe_result;
+    }
 
     if (!owns_opacity && visibility_rule == ShellVisibilityRule::none &&
         background_rule == ShellBackgroundRule::none &&
         !owns_taskbar_capsule_outline &&
-        geometry_rule == ShellGeometryRule::none) {
+        geometry_rule == ShellGeometryRule::none &&
+        start_menu_layout_rule == StartMenuLayoutRule::none) {
         if (taskbar_layout != nullptr) {
             const HRESULT refresh_result =
                 RefreshTaskbarLayout(*taskbar_layout);
+            if (FAILED(refresh_result)) {
+                return refresh_result;
+            }
+        }
+        if (start_menu_observe_result == S_OK) {
+            const HRESULT refresh_result = RefreshStartMenuLayout();
             if (FAILED(refresh_result)) {
                 return refresh_result;
             }
@@ -294,6 +484,10 @@ HRESULT ShellXamlStyle::OnElementAdded(
             existing->geometry_rule != ShellGeometryRule::none) {
             result = ApplyGeometry(*existing, true);
         }
+        if (SUCCEEDED(result) &&
+            existing->start_menu_layout_rule != StartMenuLayoutRule::none) {
+            result = ApplyStartMenuLayout(*existing, true);
+        }
         if (SUCCEEDED(result) && taskbar_layout != nullptr &&
             taskbar_layout->frame_handle == handle &&
             taskbar_layout->layout_root_handle != 0) {
@@ -306,6 +500,9 @@ HRESULT ShellXamlStyle::OnElementAdded(
             if (FAILED(refresh_result)) {
                 result = refresh_result;
             }
+        }
+        if (SUCCEEDED(result) && start_menu_observe_result == S_OK) {
+            result = RefreshStartMenuLayout();
         }
         return result;
     }
@@ -404,12 +601,25 @@ HRESULT ShellXamlStyle::OnElementAdded(
                 capsule_outer_margin));
         }
     }
+    std::uint64_t original_element_layout = 0;
+    if (start_menu_layout_rule != StartMenuLayoutRule::none) {
+        const HRESULT layout_result = accessor_.CaptureElementLayout(
+            handle,
+            original_element_layout);
+        if (FAILED(layout_result)) {
+            accessor_.ReleaseBrushSnapshot(original_brush);
+            accessor_.ReleaseTaskbarCapsuleOutlineSnapshot(
+                original_taskbar_capsule_outline);
+            return layout_result;
+        }
+    }
 
     TrackedElement* slot = FindEmpty();
     if (slot == nullptr) {
         accessor_.ReleaseBrushSnapshot(original_brush);
         accessor_.ReleaseTaskbarCapsuleOutlineSnapshot(
             original_taskbar_capsule_outline);
+        accessor_.ReleaseElementLayoutSnapshot(original_element_layout);
         return HRESULT_FROM_WIN32(ERROR_TOO_MANY_OPEN_FILES);
     }
     slot->handle = handle;
@@ -424,6 +634,8 @@ HRESULT ShellXamlStyle::OnElementAdded(
     slot->original_taskbar_capsule_outline =
         original_taskbar_capsule_outline;
     slot->geometry_rule = geometry_rule;
+    slot->start_menu_layout_rule = start_menu_layout_rule;
+    slot->original_element_layout = original_element_layout;
     slot->original_margin = original_margin;
     slot->original_corner_radius = original_corner_radius;
     slot->capsule_outer_margin = capsule_outer_margin;
@@ -460,6 +672,10 @@ HRESULT ShellXamlStyle::OnElementAdded(
         geometry_rule != ShellGeometryRule::none) {
         write_result = ApplyGeometry(*slot, true);
     }
+    if (SUCCEEDED(write_result) &&
+        start_menu_layout_rule != StartMenuLayoutRule::none) {
+        write_result = ApplyStartMenuLayout(*slot, true);
+    }
     if (FAILED(write_result)) {
         if (owns_opacity) {
             static_cast<void>(
@@ -491,9 +707,15 @@ HRESULT ShellXamlStyle::OnElementAdded(
                     original_corner_radius));
             }
         }
+        if (start_menu_layout_rule != StartMenuLayoutRule::none) {
+            static_cast<void>(accessor_.RestoreElementLayout(
+                handle,
+                original_element_layout));
+        }
         accessor_.ReleaseBrushSnapshot(original_brush);
         accessor_.ReleaseTaskbarCapsuleOutlineSnapshot(
             original_taskbar_capsule_outline);
+        accessor_.ReleaseElementLayoutSnapshot(original_element_layout);
         *slot = {};
         tracked_count_.fetch_sub(1, std::memory_order_release);
     }
@@ -510,11 +732,19 @@ HRESULT ShellXamlStyle::OnElementAdded(
             write_result = refresh_result;
         }
     }
+    if (SUCCEEDED(write_result) && start_menu_observe_result == S_OK) {
+        write_result = RefreshStartMenuLayout();
+    }
     return write_result;
 }
 
 void ShellXamlStyle::OnElementRemoved(const std::uint64_t handle) noexcept {
+    if (start_menu_layout_mutation_in_progress_ &&
+        handle == start_menu_layout_.recommended_handle) {
+        return;
+    }
     ForgetTaskbarLayoutHandle(handle);
+    ForgetStartMenuLayoutHandle(handle);
     Forget(handle);
 }
 
@@ -522,6 +752,17 @@ HRESULT ShellXamlStyle::ApplyDesiredToTrackedElements() noexcept {
     const bool enabled = enabled_.load(std::memory_order_acquire);
     const double desired_opacity = DesiredOpacity();
     HRESULT first_failure = S_OK;
+
+    const bool three_panel_enabled =
+        enabled && target_ == protocol::AgentTarget::start_menu &&
+        start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire);
+    if (three_panel_enabled) {
+        const HRESULT result = RefreshStartMenuLayout();
+        if (FAILED(result)) {
+            first_failure = result;
+        }
+    }
 
     for (auto& element : tracked_) {
         if (element.handle == 0) {
@@ -562,6 +803,10 @@ HRESULT ShellXamlStyle::ApplyDesiredToTrackedElements() noexcept {
             element.geometry_rule != ShellGeometryRule::none) {
             result = ApplyGeometry(element, enabled);
         }
+        if (SUCCEEDED(result) &&
+            element.start_menu_layout_rule != StartMenuLayoutRule::none) {
+            result = ApplyStartMenuLayout(element, enabled);
+        }
         constexpr HRESULT element_not_found =
             HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
         if (SUCCEEDED(result) || result == element_not_found) {
@@ -569,6 +814,8 @@ HRESULT ShellXamlStyle::ApplyDesiredToTrackedElements() noexcept {
                 accessor_.ReleaseBrushSnapshot(element.original_brush);
                 accessor_.ReleaseTaskbarCapsuleOutlineSnapshot(
                     element.original_taskbar_capsule_outline);
+                accessor_.ReleaseElementLayoutSnapshot(
+                    element.original_element_layout);
                 element = {};
                 tracked_count_.fetch_sub(1, std::memory_order_release);
             }
@@ -576,8 +823,13 @@ HRESULT ShellXamlStyle::ApplyDesiredToTrackedElements() noexcept {
             first_failure = result;
         }
     }
+    const HRESULT layout_result = RefreshStartMenuLayout();
+    if (FAILED(layout_result) && SUCCEEDED(first_failure)) {
+        first_failure = layout_result;
+    }
     if (!enabled && tracked_count_.load(std::memory_order_acquire) == 0) {
         taskbar_layouts_.fill({});
+        start_menu_layout_ = {};
     }
     return first_failure;
 }
@@ -679,6 +931,340 @@ HRESULT ShellXamlStyle::ApplyGeometry(
             element.original_margin));
     }
     return result;
+}
+
+HRESULT ShellXamlStyle::ApplyStartMenuLayout(
+    const TrackedElement& element,
+    const bool enabled) noexcept {
+    if (element.start_menu_layout_rule == StartMenuLayoutRule::none) {
+        return S_OK;
+    }
+    const bool layout_enabled =
+        enabled && target_ == protocol::AgentTarget::start_menu &&
+        start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire);
+    if (!layout_enabled) {
+        return accessor_.RestoreElementLayout(
+            element.handle,
+            element.original_element_layout);
+    }
+    return accessor_.WriteElementLayout(
+        element.handle,
+        StartMenuLayoutFor(element.start_menu_layout_rule));
+}
+
+HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
+    const std::uint64_t handle,
+    const std::wstring_view type_name,
+    const std::wstring_view element_name,
+    const std::uint64_t parent_handle) noexcept {
+    if (target_ != protocol::AgentTarget::start_menu || handle == 0) {
+        return S_FALSE;
+    }
+    if (start_menu_layout_mutation_in_progress_ &&
+        handle == start_menu_layout_.recommended_handle) {
+        return S_FALSE;
+    }
+    const auto remember_candidate = [](
+                                        auto& candidates,
+                                        const std::uint64_t candidate_handle,
+                                        const std::uint64_t candidate_parent) {
+        for (auto& candidate : candidates) {
+            if (candidate.handle == candidate_handle ||
+                candidate.handle == 0) {
+                candidate = {candidate_handle, candidate_parent};
+                return;
+            }
+        }
+        std::rotate(
+            candidates.begin(),
+            candidates.begin() + 1,
+            candidates.end());
+        candidates.back() = {candidate_handle, candidate_parent};
+    };
+    const auto find_child = [](
+                                const auto& candidates,
+                                const std::uint64_t parent) {
+        for (const auto& candidate : candidates) {
+            if (candidate.parent_handle == parent) {
+                return candidate.handle;
+            }
+        }
+        return std::uint64_t{0};
+    };
+    const auto resolve_main_surface = [&]() {
+        if (start_menu_layout_.main_menu_handle == 0) {
+            return;
+        }
+        start_menu_layout_.acrylic_border_handle = find_child(
+            start_menu_layout_.acrylic_border_candidates,
+            start_menu_layout_.main_menu_handle);
+        start_menu_layout_.main_content_handle = find_child(
+            start_menu_layout_.main_content_candidates,
+            start_menu_layout_.main_menu_handle);
+        if (start_menu_layout_.main_content_handle != 0) {
+            start_menu_layout_.acrylic_overlay_handle = find_child(
+                start_menu_layout_.acrylic_overlay_candidates,
+                start_menu_layout_.main_content_handle);
+        }
+    };
+    if (type_name == L"StartMenu.StartBlendedFlexFrame" &&
+        element_name.empty()) {
+        start_menu_layout_.frame_handle = handle;
+        return S_OK;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"MainMenu") {
+        start_menu_layout_.main_menu_handle = handle;
+        resolve_main_surface();
+        return S_OK;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Border" &&
+        element_name == L"AcrylicBorder") {
+        remember_candidate(
+            start_menu_layout_.acrylic_border_candidates,
+            handle,
+            parent_handle);
+        resolve_main_surface();
+        return S_OK;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Border" &&
+        element_name == L"AcrylicOverlay") {
+        remember_candidate(
+            start_menu_layout_.acrylic_overlay_candidates,
+            handle,
+            parent_handle);
+        resolve_main_surface();
+        return S_OK;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"MainContent") {
+        remember_candidate(
+            start_menu_layout_.main_content_candidates,
+            handle,
+            parent_handle);
+        resolve_main_surface();
+        return S_OK;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"TopLevelHeader") {
+        start_menu_layout_.top_level_header_handle = handle;
+        return S_OK;
+    }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"TopLevelSuggestionsRoot" && parent_handle != 0) {
+        start_menu_layout_.recommended_handle = handle;
+        start_menu_layout_.recommended_parent_handle = parent_handle;
+        return S_OK;
+    }
+    return S_FALSE;
+}
+
+HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
+    if (target_ != protocol::AgentTarget::start_menu) {
+        return S_OK;
+    }
+    if (start_menu_layout_mutation_in_progress_) {
+        return S_FALSE;
+    }
+    const bool layout_enabled =
+        enabled_.load(std::memory_order_acquire) &&
+        start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire);
+    HRESULT first_failure = S_OK;
+    const auto preserve_first_failure =
+        [&first_failure](const HRESULT candidate) noexcept {
+            if (FAILED(candidate) && SUCCEEDED(first_failure)) {
+                first_failure = candidate;
+            }
+        };
+
+    if (!layout_enabled) {
+        if (start_menu_layout_.frame_envelope_snapshot != 0) {
+            const HRESULT restore_result =
+                accessor_.RestoreStartMenuFrameEnvelope(
+                    start_menu_layout_.frame_envelope_snapshot);
+            preserve_first_failure(restore_result);
+            if (SUCCEEDED(restore_result)) {
+                accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
+                    start_menu_layout_.frame_envelope_snapshot);
+                start_menu_layout_.frame_envelope_snapshot = 0;
+            }
+        }
+        if (start_menu_layout_.all_apps_snapshot != 0) {
+            start_menu_layout_mutation_in_progress_ = true;
+            const HRESULT restore_result = accessor_.RestoreStartMenuAllApps(
+                start_menu_layout_.all_apps_snapshot);
+            start_menu_layout_mutation_in_progress_ = false;
+            preserve_first_failure(restore_result);
+            if (SUCCEEDED(restore_result)) {
+                accessor_.ReleaseStartMenuAllAppsSnapshot(
+                    start_menu_layout_.all_apps_snapshot);
+                start_menu_layout_.all_apps_snapshot = 0;
+            }
+        }
+        if (start_menu_layout_.recommended_snapshot != 0) {
+            start_menu_layout_mutation_in_progress_ = true;
+            const HRESULT restore_result =
+                accessor_.RestoreStartMenuRecommended(
+                    start_menu_layout_.recommended_snapshot);
+            start_menu_layout_mutation_in_progress_ = false;
+            preserve_first_failure(restore_result);
+            if (SUCCEEDED(restore_result)) {
+                accessor_.ReleaseStartMenuRecommendedSnapshot(
+                    start_menu_layout_.recommended_snapshot);
+                start_menu_layout_.recommended_snapshot = 0;
+            }
+        }
+        if (start_menu_layout_.recommended_snapshot == 0 &&
+            start_menu_layout_.panel_surface_snapshot != 0) {
+            const HRESULT restore_result =
+                accessor_.RestoreStartMenuThreePanelSurface(
+                    start_menu_layout_.panel_surface_snapshot);
+            preserve_first_failure(restore_result);
+            if (SUCCEEDED(restore_result)) {
+                accessor_.ReleaseStartMenuThreePanelSurfaceSnapshot(
+                    start_menu_layout_.panel_surface_snapshot);
+                start_menu_layout_.panel_surface_snapshot = 0;
+            }
+        }
+        return first_failure;
+    }
+
+    if (start_menu_layout_.frame_envelope_snapshot == 0 &&
+        start_menu_layout_.frame_handle != 0) {
+        preserve_first_failure(accessor_.CreateStartMenuFrameEnvelope(
+            start_menu_layout_.frame_handle,
+            start_menu_layout_.frame_envelope_snapshot));
+    }
+
+    if (start_menu_layout_.panel_surface_snapshot == 0 &&
+        start_menu_layout_.main_menu_handle != 0 &&
+        start_menu_layout_.acrylic_border_handle != 0 &&
+        start_menu_layout_.acrylic_overlay_handle != 0) {
+        preserve_first_failure(
+            accessor_.CreateStartMenuThreePanelSurface(
+                start_menu_layout_.main_menu_handle,
+                start_menu_layout_.acrylic_border_handle,
+                start_menu_layout_.acrylic_overlay_handle,
+                start_menu_layout_.panel_surface_snapshot));
+    } else if (start_menu_layout_.panel_surface_snapshot != 0) {
+        preserve_first_failure(
+            accessor_.UpdateStartMenuThreePanelSurface(
+                start_menu_layout_.panel_surface_snapshot));
+    }
+
+    if (start_menu_layout_.recommended_snapshot == 0 &&
+        start_menu_layout_.recommended_handle != 0 &&
+        start_menu_layout_.recommended_parent_handle != 0 &&
+        start_menu_layout_.main_menu_handle != 0) {
+        start_menu_layout_mutation_in_progress_ = true;
+        const HRESULT attach_result =
+            accessor_.AttachStartMenuRecommended(
+                start_menu_layout_.recommended_handle,
+                start_menu_layout_.recommended_parent_handle,
+                start_menu_layout_.main_menu_handle,
+                start_menu_layout_.recommended_snapshot);
+        start_menu_layout_mutation_in_progress_ = false;
+        preserve_first_failure(attach_result);
+    }
+
+    if (start_menu_layout_.all_apps_snapshot == 0 &&
+        start_menu_layout_.panel_surface_snapshot != 0) {
+        start_menu_layout_mutation_in_progress_ = true;
+        const HRESULT attach_result = accessor_.CreateStartMenuAllAppsPanel(
+            start_menu_layout_.panel_surface_snapshot,
+            !start_menu_hide_all_apps_.load(std::memory_order_acquire),
+            start_menu_layout_.all_apps_snapshot);
+        start_menu_layout_mutation_in_progress_ = false;
+        preserve_first_failure(attach_result);
+    } else if (start_menu_layout_.all_apps_snapshot != 0) {
+        preserve_first_failure(accessor_.UpdateStartMenuAllAppsVisibility(
+            start_menu_layout_.all_apps_snapshot,
+            !start_menu_hide_all_apps_.load(std::memory_order_acquire)));
+    }
+    return first_failure;
+}
+
+void ShellXamlStyle::ForgetStartMenuLayoutHandle(
+    const std::uint64_t handle) noexcept {
+    if (handle == 0 || target_ != protocol::AgentTarget::start_menu) {
+        return;
+    }
+    const bool surface_dependency =
+        handle == start_menu_layout_.main_menu_handle ||
+        handle == start_menu_layout_.acrylic_border_handle ||
+        handle == start_menu_layout_.acrylic_overlay_handle ||
+        handle == start_menu_layout_.main_content_handle;
+    const bool all_apps_dependency =
+        surface_dependency ||
+        handle == start_menu_layout_.top_level_header_handle;
+    const bool recommended_dependency =
+        handle == start_menu_layout_.main_menu_handle ||
+        handle == start_menu_layout_.recommended_handle ||
+        handle == start_menu_layout_.recommended_parent_handle;
+    if (handle == start_menu_layout_.frame_handle &&
+        start_menu_layout_.frame_envelope_snapshot != 0) {
+        accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
+            start_menu_layout_.frame_envelope_snapshot);
+        start_menu_layout_.frame_envelope_snapshot = 0;
+    }
+    if (all_apps_dependency && start_menu_layout_.all_apps_snapshot != 0) {
+        start_menu_layout_mutation_in_progress_ = true;
+        accessor_.ReleaseStartMenuAllAppsSnapshot(
+            start_menu_layout_.all_apps_snapshot);
+        start_menu_layout_mutation_in_progress_ = false;
+        start_menu_layout_.all_apps_snapshot = 0;
+    }
+    if (recommended_dependency &&
+        start_menu_layout_.recommended_snapshot != 0) {
+        start_menu_layout_mutation_in_progress_ = true;
+        accessor_.ReleaseStartMenuRecommendedSnapshot(
+            start_menu_layout_.recommended_snapshot);
+        start_menu_layout_mutation_in_progress_ = false;
+        start_menu_layout_.recommended_snapshot = 0;
+    }
+    if (surface_dependency &&
+        start_menu_layout_.panel_surface_snapshot != 0) {
+        accessor_.ReleaseStartMenuThreePanelSurfaceSnapshot(
+            start_menu_layout_.panel_surface_snapshot);
+        start_menu_layout_.panel_surface_snapshot = 0;
+    }
+    if (handle == start_menu_layout_.main_menu_handle) {
+        start_menu_layout_.main_menu_handle = 0;
+    }
+    if (handle == start_menu_layout_.frame_handle) {
+        start_menu_layout_.frame_handle = 0;
+    }
+    if (handle == start_menu_layout_.acrylic_border_handle) {
+        start_menu_layout_.acrylic_border_handle = 0;
+    }
+    if (handle == start_menu_layout_.acrylic_overlay_handle) {
+        start_menu_layout_.acrylic_overlay_handle = 0;
+    }
+    if (handle == start_menu_layout_.main_content_handle) {
+        start_menu_layout_.main_content_handle = 0;
+    }
+    const auto forget_candidate = [handle](auto& candidates) {
+        for (auto& candidate : candidates) {
+            if (candidate.handle == handle ||
+                candidate.parent_handle == handle) {
+                candidate = {};
+            }
+        }
+    };
+    forget_candidate(start_menu_layout_.acrylic_border_candidates);
+    forget_candidate(start_menu_layout_.acrylic_overlay_candidates);
+    forget_candidate(start_menu_layout_.main_content_candidates);
+    if (handle == start_menu_layout_.top_level_header_handle) {
+        start_menu_layout_.top_level_header_handle = 0;
+    }
+    if (handle == start_menu_layout_.recommended_handle) {
+        start_menu_layout_.recommended_handle = 0;
+    }
+    if (handle == start_menu_layout_.recommended_parent_handle) {
+        start_menu_layout_.recommended_parent_handle = 0;
+    }
 }
 
 HRESULT ShellXamlStyle::EnsureTaskbarLayoutRoot(
@@ -1049,6 +1635,8 @@ void ShellXamlStyle::Forget(const std::uint64_t handle) noexcept {
         accessor_.ReleaseBrushSnapshot(element->original_brush);
         accessor_.ReleaseTaskbarCapsuleOutlineSnapshot(
             element->original_taskbar_capsule_outline);
+        accessor_.ReleaseElementLayoutSnapshot(
+            element->original_element_layout);
         *element = {};
         tracked_count_.fetch_sub(1, std::memory_order_release);
     }

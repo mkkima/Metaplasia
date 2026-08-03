@@ -450,7 +450,11 @@ Result<void> EngineController::SetCustomization(
             request.customization ==
                 protocol::CustomizationId::start_menu_background_color_enabled ||
             request.customization ==
-                protocol::CustomizationId::start_menu_background_color) {
+                protocol::CustomizationId::start_menu_background_color ||
+            request.customization ==
+                protocol::CustomizationId::start_menu_three_panel_layout_enabled ||
+            request.customization ==
+                protocol::CustomizationId::start_menu_hide_all_apps) {
             ++start_menu_configuration_generation_;
         } else {
             ++explorer_configuration_generation_;
@@ -711,7 +715,9 @@ void EngineController::ReconcileExplorer(
         protocol::kDefaultStartMenuOpacityMilli,
         false,
         false,
-        protocol::kDefaultShellBackgroundColor);
+        protocol::kDefaultShellBackgroundColor,
+        false,
+        false);
 
     for (const auto& process : processes) {
         if (process.process_id == shell_process_id) {
@@ -759,7 +765,9 @@ void EngineController::ReconcileExplorer(
             protocol::kDefaultStartMenuOpacityMilli,
             false,
             false,
-            protocol::kDefaultShellBackgroundColor);
+            protocol::kDefaultShellBackgroundColor,
+            false,
+            false);
     }
 }
 
@@ -779,6 +787,11 @@ void EngineController::ReconcileStartMenu(
     if (settings.start_menu_enabled &&
         settings.start_menu_background_color_enabled) {
         desired_features |= protocol::agent_feature_start_menu_background_color;
+    }
+    if (settings.start_menu_enabled &&
+        settings.start_menu_three_panel_layout_enabled) {
+        desired_features |=
+            protocol::agent_feature_start_menu_three_panel_layout;
     }
     const std::uint32_t process_id =
         selected != nullptr ? selected->process_id : 0;
@@ -813,7 +826,9 @@ void EngineController::ReconcileStartMenu(
         settings.start_menu_opacity_milli,
         settings.start_menu_hide_recommended,
         settings.start_menu_background_color_enabled,
-        settings.start_menu_background_color);
+        settings.start_menu_background_color,
+        settings.start_menu_three_panel_layout_enabled,
+        settings.start_menu_hide_all_apps);
 }
 
 EngineController::ProcessGroupState& EngineController::ProcessStateLocked(
@@ -856,7 +871,9 @@ void EngineController::ReconcileProcess(
     const std::uint32_t start_menu_opacity_milli,
     const bool start_menu_hide_recommended,
     const bool start_menu_background_color_enabled,
-    const std::uint32_t start_menu_background_color) {
+    const std::uint32_t start_menu_background_color,
+    const bool start_menu_three_panel_layout_enabled,
+    const bool start_menu_hide_all_apps) {
     {
         std::lock_guard lock(mutex_);
         auto& state = ProcessStateLocked(slot, process_id);
@@ -945,6 +962,10 @@ void EngineController::ReconcileProcess(
     configuration.start_menu_background_color_enabled =
         start_menu_background_color_enabled ? 1 : 0;
     configuration.start_menu_background_color = start_menu_background_color;
+    configuration.start_menu_three_panel_layout_enabled =
+        start_menu_three_panel_layout_enabled ? 1 : 0;
+    configuration.start_menu_hide_all_apps =
+        start_menu_hide_all_apps ? 1 : 0;
     if (clock_prefix != nullptr) {
         wcsncpy_s(
             configuration.taskbar_clock_prefix,

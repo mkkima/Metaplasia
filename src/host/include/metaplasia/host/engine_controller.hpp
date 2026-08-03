@@ -113,7 +113,9 @@ private:
         std::uint32_t start_menu_opacity_milli,
         bool start_menu_hide_recommended,
         bool start_menu_background_color_enabled,
-        std::uint32_t start_menu_background_color);
+        std::uint32_t start_menu_background_color,
+        bool start_menu_three_panel_layout_enabled,
+        bool start_menu_hide_all_apps);
     void DeactivateLoadedAgents() noexcept;
     [[nodiscard]] CompatibilityState EvaluateCompatibility(
         compatibility::AdapterId adapter,

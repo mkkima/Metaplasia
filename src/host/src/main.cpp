@@ -315,10 +315,42 @@ int Run() {
                     response.payload = std::move(payload).value();
                     return response;
                 }
+                case protocol::MessageKind::prepare_update_request: {
+                    if (!request.payload.empty()) {
+                        return Status(
+                            ErrorCode::invalid_data,
+                            "Prepare-update request payload must be empty");
+                    }
+                    auto payload = protocol::EncodeCommandResponse(
+                        {true, "Host is ready to stop for a verified update"});
+                    if (!payload.ok()) {
+                        return payload.status();
+                    }
+                    response.header.kind =
+                        protocol::MessageKind::command_response;
+                    response.payload = std::move(payload).value();
+                    return response;
+                }
                 default:
                     return Status(
                         ErrorCode::invalid_data,
                         "Unsupported protocol message");
+            }
+        },
+        [](const protocol::Frame& request,
+           const protocol::Frame& response,
+           const bool acknowledged) {
+            if (acknowledged &&
+                request.header.kind ==
+                    protocol::MessageKind::prepare_update_request &&
+                response.header.kind ==
+                    protocol::MessageKind::command_response &&
+                g_stop_event) {
+                // Stop only after the caller has received and acknowledged the
+                // success response. This preserves named-pipe transaction
+                // semantics while allowing the host to unload its controllers
+                // before the portable update helper replaces the binaries.
+                ::SetEvent(g_stop_event.get());
             }
         });
 
