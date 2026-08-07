@@ -1,6 +1,7 @@
 #include "metaplasia/base/unique_handle.hpp"
 #include "metaplasia/base/windows_paths.hpp"
 #include "metaplasia/compatibility/catalog.hpp"
+#include "metaplasia/host/diagnostic_log.hpp"
 #include "metaplasia/host/engine_controller.hpp"
 #include "metaplasia/host/settings_store.hpp"
 #include "metaplasia/host/watchdog_client.hpp"
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -75,11 +77,28 @@ int Run() {
         return 14;
     }
 
+    host::DiagnosticLog diagnostic_log(data_directory.value() / L"logs");
+    diagnostic_log.Write(
+        host::DiagnosticLevel::info,
+        "host",
+        "startup",
+        "host",
+        ::GetCurrentProcessId(),
+        "Native host startup began for session " +
+            std::to_string(session.value()));
+
     const auto agent_path =
         executable_directory.value() / L"metaplasia-agent.dll";
     std::error_code filesystem_error;
     if (!std::filesystem::is_regular_file(agent_path, filesystem_error) ||
         filesystem_error) {
+        diagnostic_log.Write(
+            host::DiagnosticLevel::error,
+            "host",
+            "agent-file-missing",
+            "host",
+            0,
+            "The native agent DLL is missing or inaccessible beside the host executable");
         return 15;
     }
     const auto watchdog_path =
@@ -106,6 +125,15 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] Component Authenticode trust failed; "
             L"refusing to activate shell customizations.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::error,
+            "host",
+            "component-trust-failed",
+            "host",
+            0,
+            component_trust.ok()
+                ? component_trust.value().detail
+                : component_trust.status().message());
         ::SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
         return 17;
     }
@@ -113,6 +141,13 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] WARNING: Debug-only unsigned component "
             L"trust policy is active.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::warning,
+            "host",
+            "development-trust-active",
+            "host",
+            ::GetCurrentProcessId(),
+            "Debug-only unsigned component trust policy is active");
     }
 
     auto profile_pack = compatibility::LoadExternalProfilePack(
@@ -124,6 +159,13 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] External compatibility pack verification "
             L"failed; refusing to start.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::error,
+            "host",
+            "compatibility-pack-failed",
+            "host",
+            0,
+            profile_pack.status().message());
         ::SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
         return 18;
     }
@@ -144,6 +186,14 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] Unable to prepare packaged-app ACLs; "
             L"Start menu injection may be unavailable.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::warning,
+            "host",
+            "agent-acl-failed",
+            "host",
+            0,
+            !directory_acl.ok() ? directory_acl.status().message()
+                                : agent_acl.status().message());
     }
 
     auto watchdog = host::WatchdogClient::Start(
@@ -156,6 +206,13 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] Watchdog readiness failed; refusing to "
             L"activate shell customizations.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::error,
+            "host",
+            "watchdog-start-failed",
+            "host",
+            0,
+            watchdog.status().message());
         ::SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
         return 19;
     }
@@ -164,7 +221,7 @@ int Run() {
     const HANDLE watchdog_graceful =
         watchdog.value().graceful_event_handle();
     std::jthread watchdog_monitor(
-        [watchdog_process, watchdog_graceful](
+        [watchdog_process, watchdog_graceful, &diagnostic_log](
             const std::stop_token stop_token) noexcept {
             while (!stop_token.stop_requested()) {
                 const DWORD wait =
@@ -179,11 +236,25 @@ int Run() {
                     ::OutputDebugStringW(
                         L"[Metaplasia Host] Watchdog exited unexpectedly; "
                         L"stopping the host safely.\n");
+                    diagnostic_log.Write(
+                        host::DiagnosticLevel::error,
+                        "host",
+                        "watchdog-exited",
+                        "host",
+                        0,
+                        "Watchdog exited unexpectedly; stopping the host safely");
                     ::SetEvent(g_stop_event.get());
                 } else if (wait != WAIT_OBJECT_0 && g_stop_event) {
                     ::OutputDebugStringW(
                         L"[Metaplasia Host] Watchdog supervision failed; "
                         L"stopping the host safely.\n");
+                    diagnostic_log.Write(
+                        host::DiagnosticLevel::error,
+                        "host",
+                        "watchdog-supervision-failed",
+                        "host",
+                        0,
+                        "Watchdog process supervision failed; stopping the host safely");
                     ::SetEvent(g_stop_event.get());
                 }
                 return;
@@ -197,6 +268,13 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] Settings are invalid; starting fail-safe with "
             L"all customizations disabled.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::error,
+            "host",
+            "settings-load-failed",
+            "host",
+            0,
+            settings.status().message());
     } else {
         initial_settings = settings.value();
     }
@@ -206,6 +284,7 @@ int Run() {
         std::move(settings_store),
         initial_settings,
         session.value(),
+        diagnostic_log,
         injector::AgentTrustPolicy{
             component_trust.value().publisher_thumbprint,
             component_trust.value().development_override});
@@ -361,12 +440,28 @@ int Run() {
         ::OutputDebugStringW(
             L"[Metaplasia Host] Unable to signal graceful watchdog "
             L"shutdown; watchdog recovery will verify safe mode.\n");
+        diagnostic_log.Write(
+            host::DiagnosticLevel::warning,
+            "host",
+            "watchdog-shutdown-signal-failed",
+            "host",
+            0,
+            graceful_shutdown.status().message());
     } else {
         ::WaitForSingleObject(watchdog_process, 5000);
     }
     watchdog_monitor.request_stop();
     watchdog_monitor.join();
     ::SetConsoleCtrlHandler(&ConsoleHandler, FALSE);
+    diagnostic_log.Write(
+        server_result.ok() ? host::DiagnosticLevel::info
+                           : host::DiagnosticLevel::error,
+        "host",
+        "shutdown",
+        "host",
+        ::GetCurrentProcessId(),
+        server_result.ok() ? "Native host stopped cleanly"
+                           : server_result.status().message());
     return server_result.ok() ? 0 : 20;
 }
 

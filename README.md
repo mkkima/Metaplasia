@@ -9,6 +9,8 @@ The repository currently contains the first end-to-end engine slice:
 
 - asynchronous Tauri control center with live target state and direct local
   named-pipe commands;
+- actionable Diagnostics with Taskbar/Start XAML selection, native error
+  decoding, and bounded rotating local host logs;
 - per-user host, process discovery, persistence, and reinjection monitoring;
 - authenticated, versioned named-pipe protocol shared by the UI and CLI;
 - same-user, same-session, same-architecture targeted injector;
@@ -66,8 +68,8 @@ shell patching is used.
   host and scoped to the same user/session.
 - `metaplasia-cli.exe` — diagnostics and explicit configuration commands.
 - `metaplasia-agent.dll` — code loaded only into a selected shell process.
-See [Architecture](docs/ARCHITECTURE.md) and [Security](docs/SECURITY.md) before
-adding new hooks.
+See [Architecture](docs/ARCHITECTURE.md), [Security](docs/SECURITY.md), and
+[Diagnostics](docs/DIAGNOSTICS.md) before adding new hooks.
 
 ## Requirements
 

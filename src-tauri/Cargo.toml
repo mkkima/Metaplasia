@@ -15,6 +15,7 @@ tauri-build = "=2.6.3"
 
 [dependencies]
 base64 = "0.22.1"
+dirs = "6.0.0"
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["fast", "std", "zeroize"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "rustls"] }
 semver = "1.0.28"

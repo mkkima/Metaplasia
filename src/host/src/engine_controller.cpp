@@ -9,6 +9,7 @@
 #include <array>
 #include <cwchar>
 #include <exception>
+#include <sstream>
 #include <utility>
 
 namespace metaplasia::host {
@@ -17,6 +18,7 @@ namespace {
 constexpr auto kMonitorInterval = std::chrono::milliseconds(200);
 constexpr auto kRetryDelay = std::chrono::seconds(10);
 constexpr auto kLoadedAgentRetryDelay = std::chrono::milliseconds(200);
+constexpr auto kRepeatedErrorLogInterval = std::chrono::seconds(30);
 constexpr auto kCompatibilityRefreshInterval = std::chrono::seconds(30);
 constexpr auto kPendingCompatibilityRefreshInterval =
     std::chrono::milliseconds(200);
@@ -119,6 +121,74 @@ const platform::ProcessInfo* SelectExplorerShellProcess(
     return SelectProcess(processes);
 }
 
+std::string_view TargetName(const protocol::TargetId target) noexcept {
+    switch (target) {
+        case protocol::TargetId::taskbar:
+            return "taskbar";
+        case protocol::TargetId::file_explorer:
+            return "file-explorer";
+        case protocol::TargetId::start_menu:
+            return "start-menu";
+        default:
+            return "unknown";
+    }
+}
+
+std::string_view CustomizationTarget(
+    const protocol::CustomizationId customization) noexcept {
+    switch (customization) {
+        case protocol::CustomizationId::taskbar_clock_prefix:
+        case protocol::CustomizationId::taskbar_opacity_milli:
+        case protocol::CustomizationId::taskbar_hide_notification_center:
+        case protocol::CustomizationId::taskbar_hide_control_center:
+        case protocol::CustomizationId::taskbar_hide_show_desktop:
+        case protocol::CustomizationId::taskbar_background_color_enabled:
+        case protocol::CustomizationId::taskbar_background_color:
+        case protocol::CustomizationId::taskbar_capsule_enabled:
+            return "taskbar";
+        case protocol::CustomizationId::file_explorer_title_prefix:
+        case protocol::CustomizationId::file_explorer_background_color_enabled:
+        case protocol::CustomizationId::file_explorer_background_color:
+        case protocol::CustomizationId::file_explorer_transition_animation:
+        case protocol::CustomizationId::file_explorer_custom_scrollbar_enabled:
+            return "file-explorer";
+        case protocol::CustomizationId::start_menu_opacity_milli:
+        case protocol::CustomizationId::start_menu_hide_recommended:
+        case protocol::CustomizationId::start_menu_background_color_enabled:
+        case protocol::CustomizationId::start_menu_background_color:
+        case protocol::CustomizationId::start_menu_three_panel_layout_enabled:
+        case protocol::CustomizationId::start_menu_hide_all_apps:
+            return "start-menu";
+        default:
+            return "unknown";
+    }
+}
+
+std::string_view ProcessTargetName(
+    const protocol::AgentTarget target,
+    const std::uint32_t features) noexcept {
+    if (target == protocol::AgentTarget::start_menu) {
+        return "start-menu";
+    }
+    constexpr std::uint32_t taskbar_features =
+        protocol::agent_feature_taskbar_clock_prefix |
+        protocol::agent_feature_taskbar_background_color |
+        protocol::agent_feature_taskbar_capsule;
+    constexpr std::uint32_t explorer_features =
+        protocol::agent_feature_file_explorer_title_prefix |
+        protocol::agent_feature_file_explorer_background_color |
+        protocol::agent_feature_file_explorer_custom_scrollbar;
+    const bool taskbar = (features & taskbar_features) != 0;
+    const bool explorer = (features & explorer_features) != 0;
+    if (taskbar && explorer) {
+        return "taskbar+file-explorer";
+    }
+    if (taskbar) {
+        return "taskbar";
+    }
+    return explorer ? "file-explorer" : "explorer-shell";
+}
+
 }  // namespace
 
 EngineController::EngineController(
@@ -126,10 +196,12 @@ EngineController::EngineController(
     SettingsStore settings_store,
     HostSettings initial_settings,
     const std::uint32_t session_id,
+    DiagnosticLog& diagnostic_log,
     const injector::AgentTrustPolicy agent_trust_policy)
     : agent_path_(std::move(agent_path)),
       settings_store_(std::move(settings_store)),
       session_id_(session_id),
+      diagnostic_log_(diagnostic_log),
       settings_(initial_settings),
       injector_(agent_trust_policy) {}
 
@@ -155,6 +227,13 @@ void EngineController::Start() {
             });
         monitor_thread_ = std::jthread(
             [this](const std::stop_token token) { MonitorLoop(token); });
+        diagnostic_log_.Write(
+            DiagnosticLevel::info,
+            "engine",
+            "monitor-started",
+            "host",
+            ::GetCurrentProcessId(),
+            "Shell process monitoring started");
     } catch (...) {
         // Prevent a late WinEvent callback from waiting on mutex_ while this
         // thread owns it and joins the event pump during partial startup.
@@ -179,6 +258,13 @@ void EngineController::Stop() noexcept {
         !explorer_window_event_thread_.joinable()) {
         return;
     }
+    diagnostic_log_.Write(
+        DiagnosticLevel::info,
+        "engine",
+        "monitor-stopping",
+        "host",
+        ::GetCurrentProcessId(),
+        "Shell process monitoring is stopping");
     if (explorer_window_event_thread_.joinable()) {
         explorer_window_event_thread_.request_stop();
         const DWORD thread_id = explorer_window_event_thread_id_.load(
@@ -421,6 +507,14 @@ Result<void> EngineController::SetEnabled(
         wake_requested_ = true;
     }
     wake_condition_.notify_one();
+    diagnostic_log_.Write(
+        DiagnosticLevel::info,
+        "engine",
+        enabled ? "target-enabled" : "target-disabled",
+        TargetName(target),
+        0,
+        enabled ? "Target customization was enabled"
+                : "Target customization was disabled");
     return {};
 }
 
@@ -462,6 +556,13 @@ Result<void> EngineController::SetCustomization(
         wake_requested_ = true;
     }
     wake_condition_.notify_one();
+    diagnostic_log_.Write(
+        DiagnosticLevel::info,
+        "engine",
+        "customization-updated",
+        CustomizationTarget(request.customization),
+        0,
+        "A customization setting was persisted; values are intentionally omitted from logs");
     return {};
 }
 
@@ -514,6 +615,15 @@ void EngineController::DeactivateLoadedAgents() noexcept {
             ::OutputDebugStringW(
                 L"[Metaplasia Host] Unable to deactivate an agent during "
                 L"shutdown; the shell process may need to be restarted.\n");
+            diagnostic_log_.Write(
+                DiagnosticLevel::warning,
+                "engine",
+                "agent-deactivation-failed",
+                agents[index].target == protocol::AgentTarget::start_menu
+                    ? "start-menu"
+                    : "explorer-shell",
+                agents[index].process_id,
+                "Unable to deactivate the native agent during host shutdown");
         }
     }
 }
@@ -523,14 +633,30 @@ void EngineController::MonitorLoop(const std::stop_token stop_token) noexcept {
         try {
             Reconcile();
         } catch (const std::exception& exception) {
+            const std::string message =
+                std::string("Monitor exception: ") + exception.what();
+            diagnostic_log_.Write(
+                DiagnosticLevel::error,
+                "engine",
+                "monitor-exception",
+                "host",
+                ::GetCurrentProcessId(),
+                message);
             std::lock_guard lock(mutex_);
-            explorer_.error = std::string("Monitor exception: ") + exception.what();
+            explorer_.error = message;
             start_menu_.error = explorer_.error;
             for (auto& [process_id, state] : explorer_auxiliary_) {
                 static_cast<void>(process_id);
                 state.error = explorer_.error;
             }
         } catch (...) {
+            diagnostic_log_.Write(
+                DiagnosticLevel::error,
+                "engine",
+                "monitor-exception",
+                "host",
+                ::GetCurrentProcessId(),
+                "Unknown monitor exception");
             std::lock_guard lock(mutex_);
             explorer_.error = "Unknown monitor exception";
             start_menu_.error = explorer_.error;
@@ -995,28 +1121,77 @@ void EngineController::ReconcileProcess(
         module_loaded_after_failure =
             loaded_after_failure.ok() && loaded_after_failure.value();
     }
-    std::lock_guard lock(mutex_);
-    auto& state = ProcessStateLocked(slot, process_id);
-    if (state.process_id != process_id) {
-        return;
-    }
-    state.operation_in_progress = false;
-    if (!result.ok()) {
-        state.agent_loaded = module_loaded_after_failure;
-        state.error = result.status().message();
-        state.retry_after = std::chrono::steady_clock::now() +
-                            (module_loaded_after_failure
-                                 ? kLoadedAgentRetryDelay
-                                 : kRetryDelay);
-        return;
+    const std::string failure_message =
+        result.ok() ? std::string{} : result.status().message();
+    bool write_failure = false;
+    {
+        std::lock_guard lock(mutex_);
+        auto& state = ProcessStateLocked(slot, process_id);
+        if (state.process_id != process_id) {
+            return;
+        }
+        state.operation_in_progress = false;
+        if (!result.ok()) {
+            const auto now = std::chrono::steady_clock::now();
+            write_failure =
+                state.last_logged_error != failure_message ||
+                state.last_error_logged_at ==
+                    std::chrono::steady_clock::time_point{} ||
+                now - state.last_error_logged_at >=
+                    kRepeatedErrorLogInterval;
+            if (write_failure) {
+                state.last_logged_error = failure_message;
+                state.last_error_logged_at = now;
+            }
+            state.agent_loaded = module_loaded_after_failure;
+            state.error = failure_message;
+            state.retry_after = now +
+                                (module_loaded_after_failure
+                                     ? kLoadedAgentRetryDelay
+                                     : kRetryDelay);
+        } else {
+            state.agent_loaded = true;
+            state.configured_process_id = process_id;
+            state.configured_features = desired_features;
+            state.configured_generation = desired_generation;
+            state.error.clear();
+            state.retry_after = {};
+            state.last_logged_error.clear();
+            state.last_error_logged_at = {};
+        }
     }
 
-    state.agent_loaded = true;
-    state.configured_process_id = process_id;
-    state.configured_features = desired_features;
-    state.configured_generation = desired_generation;
-    state.error.clear();
-    state.retry_after = {};
+    const std::string_view diagnostic_target =
+        ProcessTargetName(target, desired_features);
+    std::ostringstream context;
+    context << "features=0x" << std::hex << std::uppercase
+            << desired_features << std::dec
+            << ", generation=" << desired_generation;
+    if (!result.ok()) {
+        if (write_failure) {
+            context << ", moduleLoaded="
+                    << (module_loaded_after_failure ? "true" : "false")
+                    << ", error=" << failure_message;
+            diagnostic_log_.Write(
+                DiagnosticLevel::error,
+                "engine",
+                "configure-failed",
+                diagnostic_target,
+                process_id,
+                context.str());
+        }
+        return;
+    }
+    context << ", result=success";
+    diagnostic_log_.Write(
+        DiagnosticLevel::info,
+        "engine",
+        desired_features == protocol::agent_feature_none
+            ? "agent-deactivated"
+            : "configure-succeeded",
+        diagnostic_target,
+        process_id,
+        context.str());
 }
 
 protocol::TargetSnapshot EngineController::BuildSnapshot(
@@ -1307,6 +1482,13 @@ void EngineController::RecordUnexpectedExit(
         auto& state = explorer_group ? explorer_ : start_menu_;
         state.error = "Crash-loop protection could not persist safe mode: " +
                       save.status().message();
+        diagnostic_log_.Write(
+            DiagnosticLevel::error,
+            "engine",
+            "crash-loop-safe-mode-failed",
+            explorer_group ? "explorer-shell" : "start-menu",
+            state.process_id,
+            state.error);
         return;
     }
 
@@ -1319,6 +1501,13 @@ void EngineController::RecordUnexpectedExit(
         explorer_group
             ? L"[Metaplasia Host] Explorer crash loop detected; shell features disabled.\n"
             : L"[Metaplasia Host] Start menu crash loop detected; feature disabled.\n");
+    diagnostic_log_.Write(
+        DiagnosticLevel::error,
+        "engine",
+        "crash-loop-safe-mode",
+        explorer_group ? "explorer-shell" : "start-menu",
+        0,
+        detail);
 }
 
 }  // namespace metaplasia::host

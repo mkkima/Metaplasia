@@ -56,6 +56,20 @@ metaplasia_configure_target(metaplasia_settings_tests)
 add_test(NAME settings_store COMMAND metaplasia_settings_tests)
 
 add_executable(
+    metaplasia_diagnostic_log_tests
+        diagnostic_log_tests.cpp
+)
+
+target_link_libraries(
+    metaplasia_diagnostic_log_tests
+    PRIVATE
+        metaplasia_host_diagnostics
+)
+
+metaplasia_configure_target(metaplasia_diagnostic_log_tests)
+add_test(NAME diagnostic_log COMMAND metaplasia_diagnostic_log_tests)
+
+add_executable(
     metaplasia_watchdog_protocol_tests
         watchdog_protocol_tests.cpp
 )

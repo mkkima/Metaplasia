@@ -2,6 +2,7 @@
 
 #include "metaplasia/base/status.hpp"
 #include "metaplasia/compatibility/catalog.hpp"
+#include "metaplasia/host/diagnostic_log.hpp"
 #include "metaplasia/host/settings_store.hpp"
 #include "metaplasia/injector/injector.hpp"
 #include "metaplasia/platform/process.hpp"
@@ -30,6 +31,7 @@ public:
         SettingsStore settings_store,
         HostSettings initial_settings,
         std::uint32_t session_id,
+        DiagnosticLog& diagnostic_log,
         injector::AgentTrustPolicy agent_trust_policy);
     ~EngineController();
 
@@ -59,6 +61,8 @@ private:
         std::uint32_t configured_process_id{0};
         std::uint64_t configured_generation{0};
         std::chrono::steady_clock::time_point retry_after{};
+        std::chrono::steady_clock::time_point last_error_logged_at{};
+        std::string last_logged_error;
         std::string error;
     };
 
@@ -133,6 +137,7 @@ private:
     std::filesystem::path agent_path_;
     SettingsStore settings_store_;
     std::uint32_t session_id_{0};
+    DiagnosticLog& diagnostic_log_;
 
     mutable std::mutex mutex_;
     std::condition_variable wake_condition_;

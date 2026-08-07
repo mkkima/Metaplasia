@@ -59,6 +59,24 @@ const STATE_LABELS = {
   incompatible: "Incompatible"
 };
 
+const AGENT_RESULT_LABELS = {
+  1: "Invalid configuration",
+  2: "Incompatible process",
+  3: "Initialization failed",
+  4: "Native hook failed",
+  5: "Agent not initialized",
+  6: "Agent busy",
+  7: "XAML adapter unavailable"
+};
+
+const HRESULT_LABELS = {
+  "80004005": "Unspecified native failure (E_FAIL)",
+  "80070005": "Access denied",
+  "800705B4": "Operation timed out",
+  "800401F0": "COM was not initialized on the calling thread",
+  "8001010E": "COM interface was used from the wrong thread"
+};
+
 const elements = {
   content: document.querySelector("#content"),
   currentView: document.querySelector("#current-view"),
@@ -71,7 +89,14 @@ const elements = {
   overviewSummary: document.querySelector("#overview-summary"),
   refreshDiagnostics: document.querySelector("#refresh-diagnostics"),
   xamlSummary: document.querySelector("#xaml-summary"),
+  xamlSectionTitle: document.querySelector("#xaml-section-title"),
   xamlTypes: document.querySelector("#xaml-types"),
+  diagnosticLogSummary: document.querySelector("#diagnostic-log-summary"),
+  diagnosticLogList: document.querySelector("#diagnostic-log-list"),
+  diagnosticLogDirectory: document.querySelector("#diagnostic-log-directory"),
+  diagnosticLogCount: document.querySelector("#diagnostic-log-count"),
+  diagnosticLogLevel: document.querySelector("#diagnostic-log-level"),
+  diagnosticLogTarget: document.querySelector("#diagnostic-log-target"),
   toastRegion: document.querySelector("#toast-region"),
   demoDesktop: document.querySelector("[data-demo-desktop]"),
   notificationPreview: document.querySelector("[data-notification-preview]"),
@@ -99,7 +124,12 @@ const runtime = {
   demoMediaPlaying: false,
   updateStatus: null,
   updateBusy: false,
-  updateTimer: 0
+  updateTimer: 0,
+  xamlTarget: "taskbar",
+  diagnosticLogs: [],
+  diagnosticLogFingerprint: "",
+  diagnosticLogsRefreshing: false,
+  diagnosticPollCount: 0
 };
 
 function icon(id) {
@@ -133,8 +163,18 @@ function buildStaticCards() {
         <dt>Process</dt><dd data-diagnostic="process">Not detected</dd>
         <dt>Native agent</dt><dd data-diagnostic="agent">Not loaded</dd>
         <dt>Process ID</dt><dd data-diagnostic="pid">—</dd>
-        <dt>Host detail</dt><dd data-diagnostic="detail">Waiting</dd>
       </dl>
+      <div class="diagnostic-analysis" data-diagnostic="analysis">
+        <span>Host detail</span><strong data-diagnostic="summary">Waiting for a snapshot</strong>
+        <p data-diagnostic="explanation" hidden></p>
+        <dl class="diagnostic-native-facts" data-diagnostic="native-facts" hidden>
+          <dt>Agent result</dt><dd data-diagnostic="result">—</dd>
+          <dt>Native HRESULT</dt><dd data-diagnostic="native">—</dd>
+          <dt>Failure stage</dt><dd data-diagnostic="stage">—</dd>
+          <dt>Controller</dt><dd data-diagnostic="controller">—</dd>
+        </dl>
+        <code data-diagnostic="detail">Waiting</code>
+      </div>
     </article>`).join("");
 }
 
@@ -149,7 +189,10 @@ function navigate(route) {
   });
   elements.currentView.textContent = ROUTE_TITLES[route];
   elements.content.scrollTop = 0;
-  if (route === "diagnostics") updateDiagnosticCards();
+  if (route === "diagnostics") {
+    updateDiagnosticCards();
+    refreshDiagnosticLogs(true);
+  }
 }
 
 function bindNavigation() {
@@ -293,7 +336,20 @@ function bindControls() {
     });
   });
 
-  elements.refreshDiagnostics.addEventListener("click", refreshXamlDiagnostics);
+  elements.refreshDiagnostics.addEventListener("click", refreshDiagnostics);
+  document.querySelectorAll("[data-xaml-target]").forEach((button) => {
+    button.addEventListener("click", () => {
+      runtime.xamlTarget = button.dataset.xamlTarget;
+      document.querySelectorAll("[data-xaml-target]").forEach((candidate) => {
+        const selected = candidate === button;
+        candidate.classList.toggle("is-active", selected);
+        candidate.setAttribute("aria-pressed", String(selected));
+      });
+      refreshXamlDiagnostics();
+    });
+  });
+  elements.diagnosticLogLevel?.addEventListener("change", renderDiagnosticLogs);
+  elements.diagnosticLogTarget?.addEventListener("change", renderDiagnosticLogs);
 
   elements.automaticUpdates?.addEventListener("change", () => {
     saveAutomaticUpdates(elements.automaticUpdates.checked);
@@ -908,19 +964,102 @@ function updateDiagnosticCards() {
     card.querySelector('[data-diagnostic="process"]').textContent = target.processRunning ? "Running" : "Not detected";
     card.querySelector('[data-diagnostic="agent"]').textContent = target.agentLoaded ? "Loaded" : "Not loaded";
     card.querySelector('[data-diagnostic="pid"]').textContent = target.processId ? String(target.processId) : "—";
-    card.querySelector('[data-diagnostic="detail"]').textContent = target.detail || "—";
-    card.querySelector('[data-diagnostic="detail"]').title = target.detail || "";
+    const interpretation = interpretTargetDiagnostic(target);
+    const analysis = card.querySelector('[data-diagnostic="analysis"]');
+    const explanation = card.querySelector('[data-diagnostic="explanation"]');
+    const facts = card.querySelector('[data-diagnostic="native-facts"]');
+    card.querySelector('[data-diagnostic="summary"]').textContent = interpretation.summary;
+    card.querySelector('[data-diagnostic="detail"]').textContent = target.detail || "No raw host detail";
+    explanation.textContent = interpretation.explanation;
+    explanation.hidden = !interpretation.explanation;
+    facts.hidden = !interpretation.hasNativeFacts;
+    card.querySelector('[data-diagnostic="result"]').textContent = interpretation.result;
+    card.querySelector('[data-diagnostic="native"]').textContent = interpretation.native;
+    card.querySelector('[data-diagnostic="stage"]').textContent = interpretation.stage;
+    card.querySelector('[data-diagnostic="controller"]').textContent = interpretation.controller;
+    analysis.classList.toggle("is-error", target.state === "error" || target.state === "incompatible");
   }
 }
 
-async function refreshXamlDiagnostics() {
-  if (!invoke || !runtime.state?.connected) {
-    showToast("The native host is not connected.", true);
-    return;
+function interpretTargetDiagnostic(target) {
+  const detail = target.detail || "No detail was returned by the native host.";
+  const resultMatch = detail.match(/code\s+(\d+)/i);
+  const nativeMatch = detail.match(/native=0x([0-9a-f]+)/i);
+  const stageMatch = detail.match(/stage=([^)]+)/i);
+  const stateMatch = detail.match(/state=0x([0-9a-f]+)/i);
+  const resultCode = resultMatch ? Number(resultMatch[1]) : null;
+  const nativeCode = nativeMatch?.[1]?.toUpperCase() || "";
+  const stage = stageMatch?.[1] || "";
+  const controllerState = stateMatch ? Number.parseInt(stateMatch[1], 16) : null;
+  const hasNativeFacts = resultCode !== null || Boolean(nativeCode || stage) || controllerState !== null;
+
+  let summary = detail;
+  let explanation = "";
+  if (target.state === "error" && resultCode === 7 && stage === "advise-visual-tree") {
+    summary = "Windows XAML visual-tree subscription failed";
+    explanation = "The agent and XAML controller loaded, but the callback subscription that observes this Windows shell surface was not established. The incomplete style change was rolled back.";
+  } else if (target.state === "error" && resultCode !== null) {
+    summary = AGENT_RESULT_LABELS[resultCode] || `Native agent failure ${resultCode}`;
+    explanation = "The native agent rejected the requested configuration and rolled back the incomplete change.";
+  } else if (target.state === "incompatible") {
+    summary = "This Windows shell build is not approved";
+    explanation = "Metaplasia failed closed because the loaded Windows binaries do not match a certified compatibility profile.";
+  } else if (target.state === "active") {
+    summary = "Target is active and responding";
+  } else if (target.state === "disabled") {
+    summary = "Target is disabled";
   }
+
+  const result = resultCode === null
+    ? "—"
+    : `${AGENT_RESULT_LABELS[resultCode] || "Unknown result"} (${resultCode})`;
+  const native = nativeCode
+    ? `0x${nativeCode} · ${HRESULT_LABELS[nativeCode] || "Unmapped HRESULT"}`
+    : resultCode !== null ? "Not reported" : "—";
+  return {
+    summary,
+    explanation,
+    hasNativeFacts,
+    result,
+    native,
+    stage: stage || "—",
+    controller: controllerState === null ? "—" : describeControllerState(controllerState)
+  };
+}
+
+function describeControllerState(state) {
+  const flags = [];
+  if (state & 0x1) flags.push("service");
+  if (state & 0x2) flags.push("watcher");
+  if (state & 0x4) flags.push("subscribed");
+  const tracked = state >>> 8;
+  flags.push(`${tracked} tracked`);
+  return `0x${state.toString(16).toUpperCase()} · ${flags.join(" · ")}`;
+}
+
+async function refreshDiagnostics() {
+  if (elements.refreshDiagnostics.disabled) return;
   elements.refreshDiagnostics.disabled = true;
   try {
-    const diagnostics = await invoke("get_xaml_diagnostics");
+    await Promise.allSettled([
+      refreshState(true),
+      refreshXamlDiagnostics(true),
+      refreshDiagnosticLogs(false)
+    ]);
+  } finally {
+    elements.refreshDiagnostics.disabled = false;
+  }
+}
+
+async function refreshXamlDiagnostics(silent = false) {
+  if (!invoke || !runtime.state?.connected) {
+    if (!silent) showToast("The native host is not connected.", true);
+    return;
+  }
+  const label = runtime.xamlTarget === "taskbar" ? "Taskbar" : "Start menu";
+  elements.xamlSectionTitle.textContent = `${label} XAML observations`;
+  try {
+    const diagnostics = await invoke("get_xaml_diagnostics", { target: runtime.xamlTarget });
     elements.xamlSummary.textContent = `${diagnostics.trackedElementCount} tracked · ${diagnostics.droppedTypeCount} dropped types · ${diagnostics.droppedElementCount} dropped elements`;
     elements.xamlTypes.replaceChildren();
     if (!diagnostics.types.length) {
@@ -943,10 +1082,111 @@ async function refreshXamlDiagnostics() {
       });
     }
   } catch (error) {
-    showToast(readError(error), true);
-  } finally {
-    elements.refreshDiagnostics.disabled = false;
+    elements.xamlSummary.textContent = `${label} diagnostics failed: ${readError(error)}`;
+    elements.xamlTypes.replaceChildren();
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 2;
+    cell.className = "empty-cell";
+    cell.textContent = `Unable to load ${label} observations.`;
+    row.append(cell);
+    elements.xamlTypes.append(row);
+    if (!silent) showToast(readError(error), true);
   }
+}
+
+async function refreshDiagnosticLogs(silent = false) {
+  if (!invoke || runtime.diagnosticLogsRefreshing) return;
+  runtime.diagnosticLogsRefreshing = true;
+  try {
+    const batch = await invoke("get_diagnostic_logs");
+    const entries = Array.isArray(batch.entries) ? batch.entries : [];
+    const first = entries[0];
+    const last = entries.at(-1);
+    const fingerprint = [
+      entries.length,
+      first?.timestamp, first?.event, first?.message,
+      last?.timestamp, last?.event, last?.message
+    ].join("\u001f");
+    const logsChanged = fingerprint !== runtime.diagnosticLogFingerprint;
+    runtime.diagnosticLogs = entries;
+    runtime.diagnosticLogFingerprint = fingerprint;
+    elements.diagnosticLogDirectory.textContent = batch.directory || "%LOCALAPPDATA%\\Metaplasia\\logs";
+    const qualifiers = [];
+    if (batch.truncated) qualifiers.push("showing the newest bounded entries");
+    if (batch.invalidLineCount) qualifiers.push(`${batch.invalidLineCount} malformed lines ignored`);
+    if (batch.unreadableFileCount) qualifiers.push(`${batch.unreadableFileCount} log files unavailable`);
+    elements.diagnosticLogSummary.textContent = qualifiers.length
+      ? `Local rotating log · ${qualifiers.join(" · ")}`
+      : "Local rotating log · 1 MB current file and 3 backups maximum.";
+    if (logsChanged) renderDiagnosticLogs();
+  } catch (error) {
+    elements.diagnosticLogSummary.textContent = `Unable to read local logs: ${readError(error)}`;
+    if (!silent) showToast(readError(error), true);
+  } finally {
+    runtime.diagnosticLogsRefreshing = false;
+  }
+}
+
+function renderDiagnosticLogs() {
+  const level = elements.diagnosticLogLevel?.value || "all";
+  const target = elements.diagnosticLogTarget?.value || "all";
+  const entries = runtime.diagnosticLogs.filter((entry) => {
+    const levelMatches = level === "all" || entry.level === level;
+    const targets = String(entry.target || "").split("+");
+    const sharedExplorerGroup = entry.target === "explorer-shell"
+      && (target === "taskbar" || target === "file-explorer");
+    const targetMatches = target === "all" || targets.includes(target) || sharedExplorerGroup;
+    return levelMatches && targetMatches;
+  }).reverse();
+
+  elements.diagnosticLogList.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "diagnostic-log-empty";
+    empty.textContent = runtime.diagnosticLogs.length
+      ? "No entries match the selected filters."
+      : "No host log entries exist yet. Restart the rebuilt host to begin logging.";
+    elements.diagnosticLogList.append(empty);
+  } else {
+    entries.forEach((entry) => elements.diagnosticLogList.append(buildDiagnosticLogEntry(entry)));
+  }
+  elements.diagnosticLogCount.textContent = `${entries.length} of ${runtime.diagnosticLogs.length} entries`;
+}
+
+function buildDiagnosticLogEntry(entry) {
+  const row = document.createElement("article");
+  row.className = `diagnostic-log-entry is-${entry.level}`;
+  const marker = document.createElement("span");
+  marker.className = "diagnostic-log-marker";
+  marker.setAttribute("aria-hidden", "true");
+  const body = document.createElement("div");
+  const header = document.createElement("div");
+  header.className = "diagnostic-log-entry-header";
+  const time = document.createElement("time");
+  time.dateTime = entry.timestamp;
+  time.textContent = formatLogTimestamp(entry.timestamp);
+  const badge = document.createElement("span");
+  badge.className = "diagnostic-log-level";
+  badge.textContent = entry.level;
+  const context = document.createElement("code");
+  context.textContent = `${entry.component}:${entry.event} · ${entry.target}${entry.processId ? ` · PID ${entry.processId}` : ""}`;
+  header.append(time, badge, context);
+  const message = document.createElement("p");
+  message.textContent = entry.message;
+  body.append(header, message);
+  row.append(marker, body);
+  return row;
+}
+
+function formatLogTimestamp(value) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return value;
+  return timestamp.toLocaleString(undefined, {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    fractionalSecondDigits: 3, hour12: false
+  });
 }
 
 function readError(error) {
@@ -970,9 +1210,23 @@ function showToast(message, isError) {
 
 function schedulePolling() {
   window.clearInterval(runtime.pollTimer);
-  runtime.pollTimer = window.setInterval(() => refreshState(false), 1200);
+  runtime.pollTimer = window.setInterval(() => {
+    refreshState(false);
+    if (runtime.route === "diagnostics") {
+      runtime.diagnosticPollCount += 1;
+      if (runtime.diagnosticPollCount >= 4) {
+        runtime.diagnosticPollCount = 0;
+        refreshDiagnosticLogs(true);
+      }
+    } else {
+      runtime.diagnosticPollCount = 0;
+    }
+  }, 1200);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refreshState(true);
+    if (!document.hidden) {
+      refreshState(true);
+      if (runtime.route === "diagnostics") refreshDiagnosticLogs(true);
+    }
   });
 }
 

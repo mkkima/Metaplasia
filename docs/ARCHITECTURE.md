@@ -73,6 +73,15 @@ Settings changes are copied, atomically persisted, and only then published to
 the monitor. Persistence and crash-loop safe-mode writes are serialized by the
 same lock. Invalid settings never enable a feature.
 
+The host also emits structured JSONL lifecycle, configuration, recovery, and
+failure events to a bounded rotating log in LocalAppData. Logging is protected
+by its own mutex and is fail-open, so filesystem failures cannot block the
+controller. Repeated identical configuration failures are rate-limited while
+the monitor continues its normal retry cadence. The Tauri diagnostics command
+reads a fixed maximum byte count, validates schema and field bounds, ignores
+malformed records, and exposes at most the newest 500 entries. See
+[Diagnostics](DIAGNOSTICS.md).
+
 Before reading settings, a new host waits for the prior session recovery lease.
 It then launches a sibling watchdog with unguessable event names and does not
 start the controller until the child validates the host identity, same-user

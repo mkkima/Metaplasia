@@ -3978,6 +3978,13 @@ protocol::AgentDiagnosticStage StartMenuXamlDiagnosticStage() noexcept {
     return g_diagnostic_stage.load(std::memory_order_acquire);
 }
 
+void PreserveShellXamlFailureDiagnostics(
+    const std::uint32_t native_error,
+    const protocol::AgentDiagnosticStage stage) noexcept {
+    g_last_adapter_error.store(native_error, std::memory_order_release);
+    g_diagnostic_stage.store(stage, std::memory_order_release);
+}
+
 std::uint32_t StartMenuXamlControllerState() noexcept {
     constexpr std::uint32_t service_present = 1U << 0U;
     constexpr std::uint32_t watcher_present = 1U << 1U;

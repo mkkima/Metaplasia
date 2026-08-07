@@ -1932,6 +1932,7 @@ name = "metaplasia-ui"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "dirs",
  "ed25519-dalek",
  "reqwest",
  "semver",

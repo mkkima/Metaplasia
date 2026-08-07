@@ -46,6 +46,9 @@ struct ShellXamlSettings final {
 [[nodiscard]] std::uint32_t StartMenuXamlLastError() noexcept;
 [[nodiscard]] protocol::AgentDiagnosticStage StartMenuXamlDiagnosticStage()
     noexcept;
+void PreserveShellXamlFailureDiagnostics(
+    std::uint32_t native_error,
+    protocol::AgentDiagnosticStage stage) noexcept;
 [[nodiscard]] std::uint32_t StartMenuXamlControllerState() noexcept;
 [[nodiscard]] protocol::AgentResult CopyShellXamlDiagnostics(
     protocol::XamlDiagnosticsSnapshot* snapshot) noexcept;

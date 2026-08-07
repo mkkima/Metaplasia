@@ -301,11 +301,28 @@
         </section>
 
         <section class="page" data-page="diagnostics" aria-labelledby="diagnostics-title">
-          <div class="page-heading page-heading-actions"><div><span class="eyebrow">Runtime</span><h1 id="diagnostics-title">Diagnostics</h1><p>Live process, injection, and XAML observation state.</p></div><button class="secondary-button" id="refresh-diagnostics" type="button"><svg><use href="#i-refresh"></use></svg>Refresh XAML data</button></div>
+          <div class="page-heading page-heading-actions"><div><span class="eyebrow">Runtime</span><h1 id="diagnostics-title">Diagnostics</h1><p>Actionable native state, XAML observations, and bounded local host logs.</p></div><button class="secondary-button" id="refresh-diagnostics" type="button"><svg><use href="#i-refresh"></use></svg>Refresh diagnostics</button></div>
           <div class="diagnostic-grid" id="diagnostic-targets"></div>
           <section class="settings-section diagnostics-table-section">
-            <div class="settings-title"><h2>Start menu XAML observations</h2><p id="xaml-summary">Refresh to inspect the current native tree.</p></div>
+            <div class="settings-title diagnostic-section-heading">
+              <div><h2 id="xaml-section-title">Taskbar XAML observations</h2><p id="xaml-summary">Refresh to inspect the current native tree.</p></div>
+              <div class="diagnostic-segmented" role="group" aria-label="XAML diagnostics target">
+                <button class="is-active" type="button" data-xaml-target="taskbar" aria-pressed="true">Taskbar</button>
+                <button type="button" data-xaml-target="start" aria-pressed="false">Start menu</button>
+              </div>
+            </div>
             <div class="table-wrap"><table><thead><tr><th>Runtime type</th><th>Observations</th></tr></thead><tbody id="xaml-types"><tr><td colspan="2" class="empty-cell">No diagnostic snapshot loaded.</td></tr></tbody></table></div>
+          </section>
+          <section class="settings-section diagnostic-log-section" aria-labelledby="diagnostic-log-title">
+            <div class="settings-title diagnostic-section-heading">
+              <div><h2 id="diagnostic-log-title">Native host log</h2><p id="diagnostic-log-summary">Logs are stored locally with a fixed retention limit.</p></div>
+              <div class="diagnostic-log-filters">
+                <label><span>Level</span><select id="diagnostic-log-level"><option value="all">All</option><option value="error">Errors</option><option value="warning">Warnings</option><option value="info">Info</option></select></label>
+                <label><span>Target</span><select id="diagnostic-log-target"><option value="all">All targets</option><option value="taskbar">Taskbar</option><option value="start-menu">Start menu</option><option value="file-explorer">File Explorer</option><option value="host">Host</option></select></label>
+              </div>
+            </div>
+            <div class="diagnostic-log-list" id="diagnostic-log-list" role="log" aria-live="polite"><p class="diagnostic-log-empty">No log entries loaded.</p></div>
+            <div class="diagnostic-log-footer"><code id="diagnostic-log-directory">%LOCALAPPDATA%\Metaplasia\logs</code><span id="diagnostic-log-count">0 entries</span></div>
           </section>
         </section>
 

@@ -770,13 +770,29 @@ input[type="range"]:disabled { opacity: 1; color: #fff; }
 .secondary-button svg { width: 17px; height: 17px; }
 
 .diagnostic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
-.diagnostic-card { padding: 20px; }
+.diagnostic-card { min-width: 0; padding: 20px; background: #000; }
 .diagnostic-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .diagnostic-card-header strong { font-size: 15px; }
 .diagnostic-facts { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 0; font-size: 12px; }
 .diagnostic-facts dt { color: var(--muted); }
 .diagnostic-facts dd { margin: 0; color: var(--text-soft); font-variant-numeric: tabular-nums; text-align: right; }
+.diagnostic-analysis { margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--line); }
+.diagnostic-analysis > span { display: block; margin-bottom: 6px; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.diagnostic-analysis > strong { display: block; font-size: 13px; line-height: 1.45; }
+.diagnostic-analysis > p { margin: 8px 0 0; color: #fff; font-size: 12px; line-height: 1.55; }
+.diagnostic-analysis > code { display: block; max-height: 82px; margin-top: 12px; padding: 9px 10px; overflow: auto; border: 1px solid var(--line); border-radius: 5px; background: #000; color: #fff; font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+.diagnostic-analysis.is-error { border-top-color: var(--danger); }
+.diagnostic-analysis.is-error > strong { color: #fff; }
+.diagnostic-native-facts { display: grid; grid-template-columns: 98px minmax(0,1fr); gap: 7px 10px; margin: 13px 0 0; font-size: 11px; }
+.diagnostic-native-facts dt { color: #fff; }
+.diagnostic-native-facts dd { min-width: 0; margin: 0; color: #fff; font-family: "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
 .diagnostics-table-section { margin-top: 0; }
+.diagnostic-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.diagnostic-section-heading > div:first-child { min-width: 0; }
+.diagnostic-segmented { display: grid; grid-template-columns: 84px 96px; gap: 5px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: #000; }
+.diagnostic-segmented button { height: 32px; padding: 0 10px; border: 1px solid transparent; border-radius: 4px; background: #000; color: #fff; font-size: 11px; font-weight: 650; cursor: pointer; }
+.diagnostic-segmented button:hover { border-color: var(--line-strong); }
+.diagnostic-segmented button.is-active { border-color: #fff; box-shadow: inset 0 -1px 0 #fff; }
 .table-wrap { max-height: 320px; overflow: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { height: 44px; padding: 0 18px; border-bottom: 1px solid var(--line); text-align: left; }
@@ -784,6 +800,30 @@ th { position: sticky; top: 0; background: #000; color: #fff; font-size: 11px; l
 th:last-child, td:last-child { width: 150px; text-align: right; }
 tbody tr:last-child td { border-bottom: 0; }
 .empty-cell { color: var(--muted); text-align: center !important; }
+
+.diagnostic-log-section { background: #000; }
+.diagnostic-log-filters { display: flex; align-items: center; gap: 10px; }
+.diagnostic-log-filters label { display: grid; gap: 4px; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.diagnostic-log-filters select { min-width: 122px; height: 34px; padding: 0 28px 0 10px; border: 1px solid var(--line-strong); border-radius: 5px; background: #000; color: #fff; font: 600 11px "Segoe UI Variable Text", "Segoe UI", sans-serif; color-scheme: dark; }
+.diagnostic-log-filters select:hover,
+.diagnostic-log-filters select:focus { border-color: #fff; outline: none; }
+.diagnostic-log-list { max-height: 440px; overflow: auto; scrollbar-color: #fff #000; scrollbar-width: thin; }
+.diagnostic-log-entry { display: grid; grid-template-columns: 3px minmax(0,1fr); gap: 13px; padding: 14px 18px; border-bottom: 1px solid var(--line); background: #000; }
+.diagnostic-log-entry:last-child { border-bottom: 0; }
+.diagnostic-log-marker { width: 3px; min-height: 42px; border-radius: 1px; background: #fff; }
+.diagnostic-log-entry.is-warning .diagnostic-log-marker { background: #ffcc4d; }
+.diagnostic-log-entry.is-error .diagnostic-log-marker { background: var(--danger); }
+.diagnostic-log-entry-header { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.diagnostic-log-entry-header time { flex: 0 0 auto; color: #fff; font: 10px "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+.diagnostic-log-level { flex: 0 0 auto; padding: 2px 5px; border: 1px solid var(--line-strong); border-radius: 3px; color: #fff; font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.diagnostic-log-entry.is-error .diagnostic-log-level { border-color: var(--danger); }
+.diagnostic-log-entry.is-warning .diagnostic-log-level { border-color: #ffcc4d; }
+.diagnostic-log-entry-header code { min-width: 0; overflow: hidden; color: #fff; font: 10px "Cascadia Mono", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-log-entry p { margin: 7px 0 0; color: #fff; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.diagnostic-log-empty { margin: 0; padding: 30px 18px; color: #fff; font-size: 12px; text-align: center; }
+.diagnostic-log-footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 42px; padding: 8px 18px; border-top: 1px solid var(--line); color: #fff; font-size: 10px; }
+.diagnostic-log-footer code { min-width: 0; overflow: hidden; color: #fff; font-family: "Cascadia Mono", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-log-footer span { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 
 .about-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
 .about-card { min-height: 190px; padding: 24px; }
@@ -843,6 +883,8 @@ tbody tr:last-child td { border-bottom: 0; }
   .demo-layout { grid-template-columns: 1fr; }
   .demo-preview { position: relative; top: auto; }
   .demo-desktop { height: 620px; }
+  .diagnostic-section-heading { align-items: flex-start; }
+  .diagnostic-log-filters { flex-wrap: wrap; justify-content: flex-end; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,3 +1,4 @@
+mod diagnostics;
 mod portable_update;
 mod protocol;
 mod start_menu_policy;
@@ -264,11 +265,19 @@ async fn set_start_all_apps_hidden(
 }
 
 #[tauri::command]
-async fn get_xaml_diagnostics() -> Result<XamlDiagnostics, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn get_xaml_diagnostics(target: String) -> Result<XamlDiagnostics, String> {
+    let target = target_id(&target)?;
+    if target != 1 && target != 3 {
+        return Err("XAML diagnostics are available only for Taskbar and Start menu".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
         let client = PipeClient::for_current_session().map_err(|error| error.to_string())?;
         let frame = client
-            .transact(MessageKind::GetXamlDiagnosticsRequest, &[3], PIPE_TIMEOUT)
+            .transact(
+                MessageKind::GetXamlDiagnosticsRequest,
+                &[target],
+                PIPE_TIMEOUT,
+            )
             .map_err(|error| error.to_string())?;
         parse_xaml_diagnostics(frame)
     })
@@ -408,7 +417,8 @@ fn parse_command_response(frame: protocol::Frame) -> Result<CommandResult, Strin
 fn parse_xaml_diagnostics(frame: protocol::Frame) -> Result<XamlDiagnostics, String> {
     expect_kind(&frame, MessageKind::XamlDiagnosticsResponse).map_err(|error| error.to_string())?;
     let mut reader = Reader::new(&frame.payload);
-    if reader.u8().map_err(|error| error.to_string())? != 3 {
+    let target = reader.u8().map_err(|error| error.to_string())?;
+    if target != 1 && target != 3 {
         return Err("Host returned diagnostics for an unexpected target".into());
     }
     let dropped_type_count = reader.u32().map_err(|error| error.to_string())?;
@@ -822,6 +832,7 @@ pub fn run() {
             set_customization,
             set_start_all_apps_hidden,
             get_xaml_diagnostics,
+            diagnostics::get_diagnostic_logs,
             portable_update::get_portable_update_status,
             portable_update::check_portable_update,
             portable_update::download_portable_update,

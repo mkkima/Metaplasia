@@ -56,6 +56,9 @@ of use. A PID is never accepted as proof of process identity.
 - Compiler/linker hardening for project targets (`/sdl`, Control Flow Guard,
   ASLR, DEP, and CET compatibility where supported).
 - Atomic settings replacement with write-through and fail-safe defaults.
+- Bounded rotating LocalAppData diagnostics logs; malformed records are ignored,
+  reads are byte/entry limited, user-entered setting values are not recorded,
+  and logging failures cannot stop the host.
 - Normal-shutdown hook removal and in-host crash-loop auto-disable.
 - Ready/graceful watchdog handshake with random event identities, validated
   same-user/session host identity, and sibling install/data path enforcement.

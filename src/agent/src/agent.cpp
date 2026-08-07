@@ -750,6 +750,10 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
         shell_xaml_required,
         ShellXamlSettingsFrom(configuration));
     if (xaml_result != AgentResult::success) {
+        const std::uint32_t xaml_native_error =
+            metaplasia::agent::StartMenuXamlLastError();
+        const auto xaml_diagnostic_stage =
+            metaplasia::agent::StartMenuXamlDiagnosticStage();
         const AgentResult explorer_rollback =
             EnsureExplorerTitleHook(old_explorer_hook_required);
         const AgentResult time_rollback =
@@ -767,6 +771,13 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
                 old_configuration.file_explorer_background_color,
                 old_configuration.file_explorer_transition_animation,
                 old_explorer_scrollbar_required);
+        // Rollback is intentionally implemented through the same adapter and
+        // therefore updates its live diagnostic atomics. Restore the original
+        // failure so the host and persistent log receive the actionable
+        // HRESULT and stage instead of a misleading S_OK from rollback.
+        metaplasia::agent::PreserveShellXamlFailureDiagnostics(
+            xaml_native_error,
+            xaml_diagnostic_stage);
         g_features.store(old_features, std::memory_order_release);
         if (titles_restored) {
             PrefixExistingExplorerWindows();
