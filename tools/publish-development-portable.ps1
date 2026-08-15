@@ -123,7 +123,19 @@ function Get-GitHubReleaseByTag {
     } catch {
         $response = $_.Exception.Response
         if ($null -ne $response -and [int]$response.StatusCode -eq 404) {
-            return $null
+            $releases = @(
+                Invoke-GitHubJson `
+                    -Method Get `
+                    -Uri "https://api.github.com/repos/${RepositoryName}/releases?per_page=100" `
+                    -Headers $Headers
+            )
+            $matches = @(
+                $releases | Where-Object { $_.tag_name -ceq $Tag }
+            )
+            if ($matches.Count -gt 1) {
+                throw "GitHub returned multiple releases for tag $Tag."
+            }
+            return $matches | Select-Object -First 1
         }
         throw
     }
