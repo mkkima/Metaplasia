@@ -48,43 +48,6 @@ struct UpdatePolicy {
     development_skipped_version: Option<String>,
 }
 
-pub fn ensure_current(
-    root: &Path,
-    version: &str,
-    channel: &str,
-) -> Result<Vec<UpdateHistoryEntry>, String> {
-    validate_version(version)?;
-    validate_channel(channel)?;
-    let mut document = read_history(root)?;
-    let latest_success = document
-        .entries
-        .iter()
-        .rev()
-        .find(|entry| entry.outcome == "success")
-        .map(|entry| (entry.version.clone(), entry.channel.clone()));
-    if latest_success
-        .as_ref()
-        .is_none_or(|(latest_version, latest_channel)| {
-            latest_version != version || latest_channel != channel
-        })
-    {
-        append_entry(
-            &mut document,
-            UpdateHistoryEntry {
-                version: version.into(),
-                previous_version: latest_success.map(|(latest_version, _)| latest_version),
-                channel: channel.into(),
-                action: "detected".into(),
-                outcome: "success".into(),
-                timestamp_unix: unix_timestamp()?,
-                detail: "Portable version detected on application startup.".into(),
-            },
-        );
-        write_history(root, &document)?;
-    }
-    Ok(document.entries)
-}
-
 pub fn record(
     root: &Path,
     previous_version: &str,
@@ -406,16 +369,8 @@ mod tests {
     }
 
     #[test]
-    fn records_current_version_once_and_preserves_transitions() {
+    fn records_version_transitions() {
         let root = temporary_root();
-        assert_eq!(
-            ensure_current(&root, "0.1.1", "development").unwrap().len(),
-            1
-        );
-        assert_eq!(
-            ensure_current(&root, "0.1.1", "development").unwrap().len(),
-            1
-        );
         record(
             &root,
             "0.1.1",
@@ -426,9 +381,13 @@ mod tests {
             "Installed.",
         )
         .unwrap();
-        let entries = ensure_current(&root, "0.1.2", "development").unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[1].previous_version.as_deref(), Some("0.1.1"));
+        let document = read_history(&root).unwrap();
+        assert_eq!(document.entries.len(), 1);
+        assert_eq!(document.entries[0].version, "0.1.2");
+        assert_eq!(
+            document.entries[0].previous_version.as_deref(),
+            Some("0.1.1")
+        );
         cleanup(&root);
     }
 
@@ -459,7 +418,18 @@ mod tests {
     fn rejects_malformed_history_without_overwriting_it() {
         let root = temporary_root();
         fs::write(history_path(&root), b"not-json").unwrap();
-        assert!(ensure_current(&root, "0.1.1", "development").is_err());
+        assert!(
+            record(
+                &root,
+                "0.1.0",
+                "0.1.1",
+                "development",
+                "update",
+                "success",
+                "Installed.",
+            )
+            .is_err()
+        );
         assert_eq!(fs::read(history_path(&root)).unwrap(), b"not-json");
         cleanup(&root);
     }
@@ -467,15 +437,24 @@ mod tests {
     #[test]
     fn recovers_history_after_an_interrupted_replacement() {
         let root = temporary_root();
-        ensure_current(&root, "0.1.1", "development").unwrap();
+        record(
+            &root,
+            "0.1.0",
+            "0.1.1",
+            "development",
+            "update",
+            "success",
+            "Installed.",
+        )
+        .unwrap();
         fs::rename(
             history_path(&root),
             backup_path(&history_path(&root)).unwrap(),
         )
         .unwrap();
 
-        let entries = ensure_current(&root, "0.1.1", "development").unwrap();
-        assert_eq!(entries.len(), 1);
+        let document = read_history(&root).unwrap();
+        assert_eq!(document.entries.len(), 1);
         assert!(history_path(&root).is_file());
         assert!(!backup_path(&history_path(&root)).unwrap().exists());
         cleanup(&root);

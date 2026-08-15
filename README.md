@@ -156,7 +156,7 @@ per-session named pipe. The only production network client is the portable
 updater: when automatic updates are enabled or the user clicks **Check now**, it
 uses outbound HTTPS solely for signed assets from this repository's GitHub
 Releases. The **Updates** page exposes the current channel, bounded local
-installation history, cache cleanup, manual controls, and same-channel signed
+published version history, cache cleanup, manual controls, and same-channel signed
 rollback. There is no telemetry, cloud service, network listener, local web
 server, installer, or background update service. See [Portable updates](docs/UPDATES.md).
 The control center loads static HTML, CSS, and JavaScript bundled inside

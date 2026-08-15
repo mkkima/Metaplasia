@@ -872,8 +872,9 @@ tbody tr:last-child td { border-bottom: 0; }
 .rollback-entry { display: grid; grid-template-columns: 4px minmax(0,1fr) auto; gap: 14px; align-items: center; min-height: 82px; padding: 14px 17px; border-bottom: 1px solid var(--line); background: #000; }
 .update-history-entry:last-child,
 .rollback-entry:last-child { border-bottom: 0; }
-.update-history-marker { align-self: stretch; width: 4px; min-height: 42px; border-radius: 1px; background: var(--success); }
-.update-history-entry.is-failed .update-history-marker { background: var(--danger); }
+.update-history-marker { align-self: stretch; width: 4px; min-height: 42px; border-radius: 1px; background: var(--line-strong); }
+.update-history-entry.is-current .update-history-marker { background: var(--success); }
+.update-history-entry.is-available .update-history-marker { background: #fff; }
 .update-history-copy,
 .rollback-copy { min-width: 0; }
 .update-history-copy strong,

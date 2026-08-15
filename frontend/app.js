@@ -122,6 +122,7 @@ const elements = {
   refreshUpdateHistory: document.querySelector("#refresh-update-history"),
   clearUpdateCache: document.querySelector("#clear-update-cache"),
   updateHistoryList: document.querySelector("#update-history-list"),
+  versionHistorySummary: document.querySelector("#version-history-summary"),
   rollbackList: document.querySelector("#rollback-list"),
   rollbackSummary: document.querySelector("#rollback-summary"),
   updateConfirmDialog: document.querySelector("#update-confirm-dialog"),
@@ -584,19 +585,10 @@ function formatUpdateBytes(value) {
   return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
 }
 
-function formatUpdateTime(timestampUnix) {
-  const timestamp = Number(timestampUnix) * 1000;
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return "Unknown time";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short"
-  }).format(new Date(timestamp));
-}
-
-function historyActionLabel(entry) {
-  if (entry.action === "rollback") return entry.outcome === "success" ? "Rolled back" : "Rollback failed";
-  if (entry.action === "update") return entry.outcome === "success" ? "Updated" : "Update failed";
-  return "Detected";
+function releaseRelationLabel(relation) {
+  if (relation === "current") return "Current";
+  if (relation === "available") return "Update available";
+  return "Previous";
 }
 
 function renderUpdateHistory(snapshot = runtime.updateHistory) {
@@ -619,38 +611,45 @@ function renderUpdateHistory(snapshot = runtime.updateHistory) {
     elements.updateStoragePath.textContent = snapshot.storagePath || "%LOCALAPPDATA%\\Metaplasia\\updates";
     elements.updateStoragePath.title = elements.updateStoragePath.textContent;
   }
-  if (elements.rollbackSummary) elements.rollbackSummary.textContent = snapshot.catalogDetail || "Signed release catalog loaded.";
+  if (elements.versionHistorySummary) {
+    elements.versionHistorySummary.textContent = snapshot.versionCatalogDetail || "Published version catalog loaded.";
+  }
+  if (elements.rollbackSummary) {
+    elements.rollbackSummary.textContent = snapshot.rollbackCatalogDetail || "Signed rollback catalog loaded.";
+  }
 
   if (elements.updateHistoryList) {
     elements.updateHistoryList.replaceChildren();
-    if (!snapshot.entries?.length) {
+    if (!snapshot.versions?.length) {
       const empty = document.createElement("p");
       empty.className = "update-empty";
-      empty.textContent = "No installation events recorded yet.";
+      empty.textContent = snapshot.versionCatalogDetail || "No published portable versions are available.";
       elements.updateHistoryList.append(empty);
     } else {
-      snapshot.entries.forEach((entry) => {
+      snapshot.versions.forEach((release) => {
         const article = document.createElement("article");
-        article.className = `update-history-entry${entry.outcome === "failed" ? " is-failed" : ""}`;
+        const relation = ["available", "current", "previous"].includes(release.relation)
+          ? release.relation
+          : "previous";
+        article.className = `update-history-entry is-${relation}`;
         const marker = document.createElement("span");
         marker.className = "update-history-marker";
         const copy = document.createElement("div");
         copy.className = "update-history-copy";
         const title = document.createElement("strong");
-        title.textContent = entry.previousVersion && entry.previousVersion !== entry.version
-          ? `${entry.previousVersion} → ${entry.version}`
-          : `Metaplasia ${entry.version}`;
+        title.textContent = `Metaplasia ${release.version}`;
         const detail = document.createElement("p");
-        detail.textContent = entry.detail || historyActionLabel(entry);
+        const published = Date.parse(release.publishedAt || "");
+        detail.textContent = Number.isFinite(published)
+          ? `Published ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(published))}`
+          : "Published portable release";
         copy.append(title, detail);
         const meta = document.createElement("div");
         meta.className = "update-history-meta";
         const badge = document.createElement("span");
         badge.className = "update-history-badge";
-        badge.textContent = historyActionLabel(entry);
-        const time = document.createElement("time");
-        time.textContent = formatUpdateTime(entry.timestampUnix);
-        meta.append(badge, time);
+        badge.textContent = releaseRelationLabel(relation);
+        meta.append(badge);
         article.append(marker, copy, meta);
         elements.updateHistoryList.append(article);
       });
@@ -662,7 +661,7 @@ function renderUpdateHistory(snapshot = runtime.updateHistory) {
     if (!snapshot.availableRollbacks?.length) {
       const empty = document.createElement("p");
       empty.className = "update-empty";
-      empty.textContent = snapshot.catalogDetail || "No older signed releases are available.";
+      empty.textContent = snapshot.rollbackCatalogDetail || "No older signed releases are available.";
       elements.rollbackList.append(empty);
     } else {
       snapshot.availableRollbacks.forEach((release) => {
@@ -702,6 +701,7 @@ async function refreshUpdateHistory(silent = false) {
     renderUpdateHistory();
   } catch (error) {
     if (!silent) showToast(readError(error), true);
+    if (elements.versionHistorySummary) elements.versionHistorySummary.textContent = readError(error);
     if (elements.rollbackSummary) elements.rollbackSummary.textContent = readError(error);
   } finally {
     runtime.updateHistoryBusy = false;

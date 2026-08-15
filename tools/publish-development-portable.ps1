@@ -7,6 +7,9 @@ param(
     [ValidatePattern('^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     [string]$Repository = 'mkkima/Metaplasia',
 
+    [ValidateNotNullOrEmpty()]
+    [string]$ReleaseNotes = 'Development portable release.',
+
     [switch]$Publish
 )
 
@@ -322,7 +325,7 @@ try {
         schema = 1
         version = $version
         published_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-        notes = "Metaplasia $version Development Portable. Adds an exact Windows 10.0.26200.9168 compatibility profile and actionable native diagnostics."
+        notes = $ReleaseNotes
         package = [ordered]@{
             url = "https://github.com/$Repository/releases/download/$tag/$zipName"
             sha256 = $hash
@@ -390,7 +393,7 @@ try {
                 tag_name = $tag
                 target_commitish = $head
                 name = "Metaplasia $version Development Portable"
-                body = 'Locally built and tested development portable release. The package manifest is signed by the isolated development update key.'
+                body = "$ReleaseNotes`n`nLocally built and tested. The package manifest is signed by the isolated development update key."
                 draft = $true
                 prerelease = $true
             })

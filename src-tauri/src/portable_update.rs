@@ -281,10 +281,11 @@ struct GitHubRelease {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RollbackRelease {
+pub struct PublishedRelease {
     version: String,
     published_at: String,
     release_url: String,
+    relation: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -293,9 +294,10 @@ pub struct UpdateHistorySnapshot {
     current_version: String,
     channel: String,
     skipped_version: Option<String>,
-    entries: Vec<crate::update_history::UpdateHistoryEntry>,
-    available_rollbacks: Vec<RollbackRelease>,
-    catalog_detail: String,
+    versions: Vec<PublishedRelease>,
+    version_catalog_detail: String,
+    available_rollbacks: Vec<PublishedRelease>,
+    rollback_catalog_detail: String,
     cache_bytes: u64,
     storage_path: String,
 }
@@ -599,54 +601,81 @@ pub fn clear_portable_update_cache(state: State<'_, UpdateManager>) -> Result<u6
 fn build_update_history_snapshot() -> Result<UpdateHistorySnapshot, String> {
     let channel = UpdateChannel::from_build()?;
     let root = update_data_directory()?;
-    let entries =
-        crate::update_history::ensure_current(&root, env!("CARGO_PKG_VERSION"), channel.id())?;
     let mut skipped_version = crate::update_history::skipped_version(&root, channel.id())?;
     if skipped_version.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
         crate::update_history::set_skipped_version(&root, channel.id(), None)?;
         skipped_version = None;
     }
-    let (available_rollbacks, catalog_detail) = match fetch_rollback_catalog(channel) {
-        Ok(releases) => {
-            let detail = if releases.is_empty() {
-                "No older signed releases are available for this channel.".into()
-            } else {
-                format!("{} signed rollback release(s) available.", releases.len())
-            };
-            (releases, detail)
-        }
-        Err(error) => (Vec::new(), format!("Release catalog unavailable: {error}")),
-    };
+    let (versions, version_catalog_detail, available_rollbacks, rollback_catalog_detail) =
+        match fetch_release_catalog(channel) {
+            Ok(versions) => {
+                let version_detail = if versions.is_empty() {
+                    "No published portable versions are available for this channel.".into()
+                } else {
+                    format!(
+                        "{} published portable version(s) in the {} channel.",
+                        versions.len(),
+                        channel.display_name()
+                    )
+                };
+                let available_rollbacks: Vec<_> = versions
+                    .iter()
+                    .filter(|release| release.relation == "previous")
+                    .take(20)
+                    .cloned()
+                    .collect();
+                let rollback_detail = if available_rollbacks.is_empty() {
+                    "No older signed releases are available for this channel.".into()
+                } else {
+                    format!(
+                        "{} signed rollback release(s) available.",
+                        available_rollbacks.len()
+                    )
+                };
+                (
+                    versions,
+                    version_detail,
+                    available_rollbacks,
+                    rollback_detail,
+                )
+            }
+            Err(error) => {
+                let detail = format!("Release catalog unavailable: {error}");
+                (Vec::new(), detail.clone(), Vec::new(), detail)
+            }
+        };
     Ok(UpdateHistorySnapshot {
         current_version: env!("CARGO_PKG_VERSION").into(),
         channel: channel.id().into(),
         skipped_version,
-        entries: entries.into_iter().rev().collect(),
+        versions,
+        version_catalog_detail,
         available_rollbacks,
-        catalog_detail,
+        rollback_catalog_detail,
         cache_bytes: recognized_cache_bytes(&root)?,
         storage_path: root.display().to_string(),
     })
 }
 
-fn fetch_rollback_catalog(channel: UpdateChannel) -> Result<Vec<RollbackRelease>, String> {
+fn fetch_release_catalog(channel: UpdateChannel) -> Result<Vec<PublishedRelease>, String> {
     let client = update_client()?;
     let bytes = fetch_limited(
         &client,
         "https://api.github.com/repos/mkkima/Metaplasia/releases?per_page=50",
         MAX_RELEASE_CATALOG_BYTES,
     )?;
-    parse_rollback_catalog(&bytes, channel, &current_version()?)
+    parse_release_catalog(&bytes, channel, &current_version()?)
 }
 
-fn parse_rollback_catalog(
+fn parse_release_catalog(
     bytes: &[u8],
     channel: UpdateChannel,
     current: &Version,
-) -> Result<Vec<RollbackRelease>, String> {
+) -> Result<Vec<PublishedRelease>, String> {
     let releases: Vec<GitHubRelease> = serde_json::from_slice(bytes)
         .map_err(|error| format!("GitHub returned an invalid release catalog: {error}"))?;
     let mut available = Vec::new();
+    let mut seen_versions = BTreeSet::new();
     for release in releases {
         if !channel.accepts_release(&release) {
             continue;
@@ -661,7 +690,7 @@ fn parse_rollback_catalog(
         let Ok(version) = canonical_version(version_text, "release catalog version") else {
             continue;
         };
-        if version >= *current || !channel.accepts_signed_version(&version) {
+        if !channel.accepts_signed_version(&version) {
             continue;
         }
         let names: BTreeSet<&str> = release
@@ -676,17 +705,26 @@ fn parse_rollback_catalog(
         {
             continue;
         }
+        if !seen_versions.insert(version.clone()) {
+            continue;
+        }
+        let relation = match version.cmp(current) {
+            std::cmp::Ordering::Greater => "available",
+            std::cmp::Ordering::Equal => "current",
+            std::cmp::Ordering::Less => "previous",
+        };
         available.push((
             version,
-            RollbackRelease {
+            PublishedRelease {
                 version: version_text.into(),
                 published_at: release.published_at.unwrap_or_default(),
                 release_url: release.html_url,
+                relation: relation.into(),
             },
         ));
     }
     available.sort_by(|(left, _), (right, _)| right.cmp(left));
-    available.truncate(20);
+    available.truncate(50);
     Ok(available.into_iter().map(|(_, release)| release).collect())
 }
 
@@ -1892,22 +1930,29 @@ mod tests {
     }
 
     #[test]
-    fn rollback_catalog_requires_complete_signed_channel_assets() {
+    fn release_catalog_contains_only_complete_signed_channel_versions() {
         let catalog = br#"[
+          {"tag_name":"dev-v0.1.5","draft":false,"prerelease":true,"published_at":"2026-08-18T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.5","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.5-windows-x64-portable-dev.zip"}]},
+          {"tag_name":"dev-v0.1.4","draft":false,"prerelease":true,"published_at":"2026-08-17T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.4","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.4-windows-x64-portable-dev.zip"}]},
           {"tag_name":"dev-v0.1.3","draft":false,"prerelease":true,"published_at":"2026-08-16T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.3","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.3-windows-x64-portable-dev.zip"}]},
           {"tag_name":"dev-v0.1.2","draft":false,"prerelease":true,"published_at":"2026-08-15T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.2","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.2-windows-x64-portable-dev.zip"}]},
           {"tag_name":"dev-v0.1.1","draft":false,"prerelease":true,"published_at":"2026-08-15T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.1","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.1-windows-x64-portable-dev.zip"}]},
           {"tag_name":"dev-v0.1.0","draft":false,"prerelease":true,"published_at":"2026-08-14T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.0","assets":[{"name":"Metaplasia-0.1.0-windows-x64-portable-dev.zip"}]},
           {"tag_name":"v0.1.0","draft":false,"prerelease":false,"published_at":"2026-08-13T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/v0.1.0","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.0-windows-x64-portable.zip"}]}
         ]"#;
-        let releases = parse_rollback_catalog(
+        let releases = parse_release_catalog(
             catalog,
             UpdateChannel::Development,
             &Version::parse("0.1.4").unwrap(),
         )
         .unwrap();
-        assert_eq!(releases.len(), 1);
-        assert_eq!(releases[0].version, "0.1.3");
+        assert_eq!(releases.len(), 3);
+        assert_eq!(releases[0].version, "0.1.5");
+        assert_eq!(releases[0].relation, "available");
+        assert_eq!(releases[1].version, "0.1.4");
+        assert_eq!(releases[1].relation, "current");
+        assert_eq!(releases[2].version, "0.1.3");
+        assert_eq!(releases[2].relation, "previous");
     }
 
     #[test]

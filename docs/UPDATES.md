@@ -25,12 +25,18 @@ The manual **Check now**, **Download update**, and **Install and restart** flow
 remains available and requires confirmation before installation.
 
 The dedicated **Updates** page also shows the running version and channel,
-verification state, downloaded-cache size, the local metadata directory, and a
-bounded installation history. History is stored in
-`%LOCALAPPDATA%\Metaplasia\updates\update-history.json`; it contains at most 50
-events and never contains the portable binaries themselves. **Clear downloads**
-removes only recognized updater cache files and deliberately leaves history,
-policy metadata, settings, and unknown files untouched.
+verification state, downloaded-cache size, the local metadata directory, and
+the published version history for the selected release channel. The version
+history comes from bounded GitHub Release metadata and only includes canonical
+channel releases that contain the complete portable package plus both signed
+manifest assets. It marks newer, current, and previous versions separately.
+
+Replacement events are still retained locally for updater recovery and audit
+purposes in `%LOCALAPPDATA%\Metaplasia\updates\update-history.json`, with a
+maximum of 50 entries, but they are not presented as the application's version
+history. **Clear downloads** removes only recognized updater cache files and
+deliberately leaves audit history, policy metadata, settings, and unknown files
+untouched.
 
 ## Signed rollback
 
@@ -134,6 +140,7 @@ development copies:
 ```powershell
 .\tools\publish-development-portable.ps1 `
   -PrivateKeyPath D:\secure\metaplasia-development-update-private.pem `
+  -ReleaseNotes 'Describe the user-visible changes in this version.' `
   -Publish
 ```
 
