@@ -55,6 +55,7 @@ jobs:
       - name: Configure, build, and test the complete portable application
         shell: pwsh
         env:
+          METAPLASIA_UPDATE_CHANNEL: stable
           METAPLASIA_UPDATE_PUBLIC_KEY: ${{ secrets.METAPLASIA_UPDATE_PUBLIC_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'

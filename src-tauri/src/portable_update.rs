@@ -18,10 +18,18 @@ use tauri::{AppHandle, State};
 
 use crate::protocol::{MessageKind, PipeClient};
 
-const UPDATE_MANIFEST_URL: &str =
+const STABLE_UPDATE_MANIFEST_URL: &str =
     "https://github.com/mkkima/Metaplasia/releases/latest/download/portable-update.json";
-const UPDATE_SIGNATURE_URL: &str =
+const STABLE_UPDATE_SIGNATURE_URL: &str =
     "https://github.com/mkkima/Metaplasia/releases/latest/download/portable-update.json.sig";
+const DEVELOPMENT_UPDATE_MANIFEST_URL: &str =
+    "https://github.com/mkkima/Metaplasia/releases/download/development/portable-update.json";
+const DEVELOPMENT_UPDATE_SIGNATURE_URL: &str =
+    "https://github.com/mkkima/Metaplasia/releases/download/development/portable-update.json.sig";
+const UPDATE_CHANNEL_NAME: &str = match option_env!("METAPLASIA_UPDATE_CHANNEL") {
+    Some(value) => value,
+    None => "stable",
+};
 const UPDATE_PUBLIC_KEY_B64: Option<&str> = option_env!("METAPLASIA_UPDATE_PUBLIC_KEY");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
@@ -36,6 +44,64 @@ const EXPECTED_FILES: [&str; 5] = [
     "metaplasia-cli.exe",
     "metaplasia-agent.dll",
 ];
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum UpdateChannel {
+    Stable,
+    Development,
+}
+
+impl UpdateChannel {
+    fn from_build() -> Result<Self, String> {
+        match UPDATE_CHANNEL_NAME {
+            "stable" => Ok(Self::Stable),
+            "development" => Ok(Self::Development),
+            value => Err(format!(
+                "This build contains an unsupported update channel: {value}"
+            )),
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Development => "development",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Stable => "Stable",
+            Self::Development => "Development",
+        }
+    }
+
+    fn manifest_url(self) -> &'static str {
+        match self {
+            Self::Stable => STABLE_UPDATE_MANIFEST_URL,
+            Self::Development => DEVELOPMENT_UPDATE_MANIFEST_URL,
+        }
+    }
+
+    fn signature_url(self) -> &'static str {
+        match self {
+            Self::Stable => STABLE_UPDATE_SIGNATURE_URL,
+            Self::Development => DEVELOPMENT_UPDATE_SIGNATURE_URL,
+        }
+    }
+}
+
+struct UpdateConfiguration {
+    channel: UpdateChannel,
+    key: VerifyingKey,
+}
+
+fn update_configuration() -> Result<UpdateConfiguration, String> {
+    Ok(UpdateConfiguration {
+        channel: UpdateChannel::from_build()?,
+        key: verification_key()?,
+    })
+}
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -95,9 +161,12 @@ struct ManagerState {
 
 impl Default for ManagerState {
     fn default() -> Self {
+        let channel = UpdateChannel::from_build()
+            .map(UpdateChannel::display_name)
+            .unwrap_or("Portable");
         Self {
             phase: "idle",
-            detail: "Ready to check GitHub Releases for a signed portable update.".into(),
+            detail: format!("Ready to check the signed {channel} portable update channel."),
             pending: None,
         }
     }
@@ -128,6 +197,7 @@ struct LastUpdateResult {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStatus {
     configured: bool,
+    channel: String,
     current_version: String,
     available_version: Option<String>,
     notes: String,
@@ -138,11 +208,18 @@ pub struct UpdateStatus {
 
 impl UpdateManager {
     fn status(&self) -> UpdateStatus {
-        let configured = verification_key().is_ok();
+        let configuration = update_configuration();
+        let configured = configuration.is_ok();
+        let channel = configuration
+            .as_ref()
+            .map(|value| value.channel.id())
+            .unwrap_or(UPDATE_CHANNEL_NAME);
+        let configuration_error = configuration.as_ref().err().map(String::as_str);
         match self.0.lock() {
-            Ok(state) => status_from_state(&state, configured),
+            Ok(state) => status_from_state(&state, configured, channel, configuration_error),
             Err(_) => UpdateStatus {
                 configured,
+                channel: channel.into(),
                 current_version: env!("CARGO_PKG_VERSION").into(),
                 available_version: None,
                 notes: String::new(),
@@ -154,27 +231,40 @@ impl UpdateManager {
     }
 
     fn check(&self) -> Result<UpdateStatus, String> {
-        let key = verification_key()?;
+        let configuration = update_configuration()?;
         let mut state = self
             .0
             .lock()
             .map_err(|_| "The update state lock is poisoned".to_string())?;
         state.phase = "checking";
-        state.detail = "Checking the signed GitHub release manifest…".into();
+        state.detail = format!(
+            "Checking the signed {} portable update manifest…",
+            configuration.channel.display_name()
+        );
 
-        match fetch_pending_update(&key) {
+        match fetch_pending_update(&configuration) {
             Ok(Some(pending)) => {
                 state.phase = "available";
                 state.detail =
                     format!("Portable update {} is available.", pending.manifest.version);
                 state.pending = Some(pending);
-                Ok(status_from_state(&state, true))
+                Ok(status_from_state(
+                    &state,
+                    true,
+                    configuration.channel.id(),
+                    None,
+                ))
             }
             Ok(None) => {
                 state.phase = "current";
                 state.detail = "This portable copy is up to date.".into();
                 state.pending = None;
-                Ok(status_from_state(&state, true))
+                Ok(status_from_state(
+                    &state,
+                    true,
+                    configuration.channel.id(),
+                    None,
+                ))
             }
             Err(error) => {
                 state.phase = "error";
@@ -185,7 +275,7 @@ impl UpdateManager {
     }
 
     fn download(&self) -> Result<UpdateStatus, String> {
-        let key = verification_key()?;
+        let configuration = update_configuration()?;
         let mut state = self
             .0
             .lock()
@@ -197,7 +287,7 @@ impl UpdateManager {
         state.phase = "downloading";
         state.detail = format!("Downloading portable update {}…", pending.manifest.version);
 
-        let result = download_pending_update(&mut pending, &key);
+        let result = download_pending_update(&mut pending, &configuration);
         match result {
             Ok(()) => {
                 state.phase = "ready";
@@ -206,7 +296,12 @@ impl UpdateManager {
                     pending.manifest.version
                 );
                 state.pending = Some(pending);
-                Ok(status_from_state(&state, true))
+                Ok(status_from_state(
+                    &state,
+                    true,
+                    configuration.channel.id(),
+                    None,
+                ))
             }
             Err(error) => {
                 state.phase = "error";
@@ -235,10 +330,16 @@ impl UpdateManager {
     }
 }
 
-fn status_from_state(state: &ManagerState, configured: bool) -> UpdateStatus {
+fn status_from_state(
+    state: &ManagerState,
+    configured: bool,
+    channel: &str,
+    configuration_error: Option<&str>,
+) -> UpdateStatus {
     let pending = state.pending.as_ref();
     UpdateStatus {
         configured,
+        channel: channel.into(),
         current_version: env!("CARGO_PKG_VERSION").into(),
         available_version: pending.map(|value| value.manifest.version.clone()),
         notes: pending
@@ -253,7 +354,9 @@ fn status_from_state(state: &ManagerState, configured: bool) -> UpdateStatus {
         detail: if configured {
             state.detail.clone()
         } else {
-            "This build has no embedded update verification key. Use a signed release build.".into()
+            configuration_error
+                .unwrap_or("This build has no valid portable update configuration.")
+                .into()
         },
         downloaded: pending.is_some_and(|value| value.package_path.is_some()),
     }
@@ -340,11 +443,26 @@ fn allowed_download_host(url: &reqwest::Url) -> bool {
     )
 }
 
-fn fetch_pending_update(key: &VerifyingKey) -> Result<Option<PendingUpdate>, String> {
+fn fetch_pending_update(
+    configuration: &UpdateConfiguration,
+) -> Result<Option<PendingUpdate>, String> {
     let client = update_client()?;
-    let manifest_bytes = fetch_limited(&client, UPDATE_MANIFEST_URL, MAX_MANIFEST_BYTES)?;
-    let signature = fetch_limited(&client, UPDATE_SIGNATURE_URL, MAX_SIGNATURE_BYTES)?;
-    let manifest = verify_manifest_bytes(&manifest_bytes, &signature, key)?;
+    let manifest_bytes = fetch_limited(
+        &client,
+        configuration.channel.manifest_url(),
+        MAX_MANIFEST_BYTES,
+    )?;
+    let signature = fetch_limited(
+        &client,
+        configuration.channel.signature_url(),
+        MAX_SIGNATURE_BYTES,
+    )?;
+    let manifest = verify_manifest_bytes(
+        &manifest_bytes,
+        &signature,
+        &configuration.key,
+        configuration.channel,
+    )?;
 
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|error| format!("The current application version is invalid: {error}"))?;
@@ -401,6 +519,7 @@ fn verify_manifest_bytes(
     manifest_bytes: &[u8],
     signature_bytes: &[u8],
     key: &VerifyingKey,
+    channel: UpdateChannel,
 ) -> Result<ReleaseManifest, String> {
     let signature = Signature::from_slice(signature_bytes)
         .map_err(|_| "The update manifest signature has an invalid length")?;
@@ -408,11 +527,11 @@ fn verify_manifest_bytes(
         .map_err(|_| "The update manifest signature is invalid")?;
     let manifest: ReleaseManifest = serde_json::from_slice(manifest_bytes)
         .map_err(|error| format!("The signed update manifest is invalid: {error}"))?;
-    validate_manifest(&manifest)?;
+    validate_manifest(&manifest, channel)?;
     Ok(manifest)
 }
 
-fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
+fn validate_manifest(manifest: &ReleaseManifest, channel: UpdateChannel) -> Result<(), String> {
     if manifest.schema != 1 {
         return Err("The signed update manifest uses an unsupported schema".into());
     }
@@ -442,10 +561,10 @@ fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
     {
         return Err("The signed portable package SHA-256 is invalid".into());
     }
-    validate_package_url(&manifest.package.url, &manifest.version)
+    validate_package_url(&manifest.package.url, &manifest.version, channel)
 }
 
-fn validate_package_url(url: &str, version: &str) -> Result<(), String> {
+fn validate_package_url(url: &str, version: &str, channel: UpdateChannel) -> Result<(), String> {
     let parsed =
         reqwest::Url::parse(url).map_err(|_| "The signed portable package URL is invalid")?;
     if parsed.scheme() != "https"
@@ -457,18 +576,31 @@ fn validate_package_url(url: &str, version: &str) -> Result<(), String> {
     {
         return Err("The signed portable package URL is not an approved GitHub URL".into());
     }
-    let expected = format!(
-        "/mkkima/Metaplasia/releases/download/v{version}/Metaplasia-{version}-windows-x64-portable.zip"
-    );
+    let expected = match channel {
+        UpdateChannel::Stable => format!(
+            "/mkkima/Metaplasia/releases/download/v{version}/Metaplasia-{version}-windows-x64-portable.zip"
+        ),
+        UpdateChannel::Development => format!(
+            "/mkkima/Metaplasia/releases/download/dev-v{version}/Metaplasia-{version}-windows-x64-portable-dev.zip"
+        ),
+    };
     if parsed.path() != expected {
         return Err("The signed portable package URL does not match this release".into());
     }
     Ok(())
 }
 
-fn download_pending_update(pending: &mut PendingUpdate, key: &VerifyingKey) -> Result<(), String> {
+fn download_pending_update(
+    pending: &mut PendingUpdate,
+    configuration: &UpdateConfiguration,
+) -> Result<(), String> {
     // Verify again immediately before trusting paths and download metadata.
-    let verified = verify_manifest_bytes(&pending.manifest_bytes, &pending.signature, key)?;
+    let verified = verify_manifest_bytes(
+        &pending.manifest_bytes,
+        &pending.signature,
+        &configuration.key,
+        configuration.channel,
+    )?;
     if verified.version != pending.manifest.version {
         return Err("The pending update manifest changed unexpectedly".into());
     }
@@ -725,7 +857,7 @@ fn parse_helper_arguments(arguments: &[OsString]) -> Result<HelperArguments, Str
 }
 
 fn apply_portable_update_helper(arguments: HelperArguments) -> Result<(), String> {
-    let key = verification_key()?;
+    let configuration = update_configuration()?;
     let update_root = update_data_directory()?;
     let helper = std::env::current_exe()
         .map_err(|error| format!("Could not resolve the update helper path: {error}"))?
@@ -753,7 +885,12 @@ fn apply_portable_update_helper(arguments: HelperArguments) -> Result<(), String
 
     let manifest_bytes = read_file_limited(&manifest_path, MAX_MANIFEST_BYTES)?;
     let signature = read_file_limited(&signature_path, MAX_SIGNATURE_BYTES)?;
-    let manifest = verify_manifest_bytes(&manifest_bytes, &signature, &key)?;
+    let manifest = verify_manifest_bytes(
+        &manifest_bytes,
+        &signature,
+        &configuration.key,
+        configuration.channel,
+    )?;
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|error| format!("The helper version is invalid: {error}"))?;
     let update = Version::parse(&manifest.version)
@@ -1183,7 +1320,8 @@ mod tests {
     #[test]
     fn accepts_valid_signed_manifest() {
         let (json, signature, key) = signed_manifest();
-        let manifest = verify_manifest_bytes(&json, &signature, &key).unwrap();
+        let manifest =
+            verify_manifest_bytes(&json, &signature, &key, UpdateChannel::Stable).unwrap();
         assert_eq!(manifest.version, "0.2.0");
     }
 
@@ -1192,7 +1330,7 @@ mod tests {
         let (mut json, signature, key) = signed_manifest();
         let position = json.iter().position(|byte| *byte == b'T').unwrap();
         json[position] = b'X';
-        assert!(verify_manifest_bytes(&json, &signature, &key).is_err());
+        assert!(verify_manifest_bytes(&json, &signature, &key, UpdateChannel::Stable).is_err());
     }
 
     #[test]
@@ -1208,9 +1346,20 @@ mod tests {
                 size: 1,
             },
         };
-        assert!(validate_manifest(&manifest).is_err());
+        assert!(validate_manifest(&manifest, UpdateChannel::Stable).is_err());
         manifest.package.url = "https://github.com/mkkima/Metaplasia/releases/download/v0.2.0/Metaplasia-0.2.0-windows-x64-portable.zip".into();
-        assert!(validate_manifest(&manifest).is_ok());
+        assert!(validate_manifest(&manifest, UpdateChannel::Stable).is_ok());
+    }
+
+    #[test]
+    fn isolates_stable_and_development_package_urls() {
+        let stable = "https://github.com/mkkima/Metaplasia/releases/download/v0.2.0/Metaplasia-0.2.0-windows-x64-portable.zip";
+        let development = "https://github.com/mkkima/Metaplasia/releases/download/dev-v0.2.0/Metaplasia-0.2.0-windows-x64-portable-dev.zip";
+
+        assert!(validate_package_url(stable, "0.2.0", UpdateChannel::Stable).is_ok());
+        assert!(validate_package_url(development, "0.2.0", UpdateChannel::Development).is_ok());
+        assert!(validate_package_url(stable, "0.2.0", UpdateChannel::Development).is_err());
+        assert!(validate_package_url(development, "0.2.0", UpdateChannel::Stable).is_err());
     }
 
     #[test]

@@ -102,6 +102,7 @@ const elements = {
   notificationPreview: document.querySelector("[data-notification-preview]"),
   audioPreview: document.querySelector("[data-audio-preview]"),
   applicationVersion: document.querySelector("#application-version"),
+  updateChannelLabel: document.querySelector("#update-channel-label"),
   automaticUpdates: document.querySelector("#automatic-updates"),
   checkUpdates: document.querySelector("#check-updates"),
   downloadUpdate: document.querySelector("#download-update"),
@@ -379,7 +380,8 @@ function saveAutomaticUpdates(enabled) {
     window.localStorage.setItem(UPDATE_STORAGE_KEY, enabled ? "1" : "0");
   } catch {
     // A hardened WebView profile can reject storage. The current-session
-    // setting still works and remains safe because installation is explicit.
+    // setting still works; the switch remains visible before any automatic
+    // update can be applied.
   }
 }
 
@@ -402,6 +404,11 @@ function renderUpdateStatus(status = runtime.updateStatus) {
   if (!status || !elements.updateStatusTitle) return;
   runtime.updateStatus = status;
   elements.applicationVersion.textContent = `Metaplasia ${status.currentVersion}`;
+  if (elements.updateChannelLabel) {
+    elements.updateChannelLabel.textContent = status.channel === "development"
+      ? "Development portable channel"
+      : "Stable portable channel";
+  }
   elements.updateStatusTitle.textContent = updatePhaseTitle(status);
   elements.updateStatusDetail.textContent = status.detail || "Ready to check GitHub Releases.";
   elements.updateNotes.textContent = status.notes || "";
@@ -438,6 +445,15 @@ async function checkForPortableUpdate(automatic) {
       status = await invoke("download_portable_update");
     }
     runtime.updateStatus = status;
+    if (automatic && status.phase === "ready" && status.downloaded) {
+      runtime.updateStatus = {
+        ...status,
+        phase: "installing",
+        detail: "The signed portable update is verified. Restarting Metaplasia and Windows shell components."
+      };
+      renderUpdateStatus();
+      await invoke("apply_portable_update");
+    }
   } catch (error) {
     runtime.updateStatus = {
       ...(runtime.updateStatus || {}),

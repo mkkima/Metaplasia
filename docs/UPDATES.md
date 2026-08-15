@@ -17,9 +17,12 @@ copy may jump directly across multiple versions.
 
 ## Update behavior
 
-The control center supports a manual check and an optional automatic background
-check/download. Installation is never silent: it requires explicit confirmation
-because Explorer and Start must briefly restart to release the injected DLL.
+The control center supports two modes. With **Automatic updates** enabled, it
+checks the configured channel in the background, verifies and downloads a newer
+complete package, then installs it and restarts Metaplasia plus the required
+Windows shell components. Turning the switch off disables that automatic path.
+The manual **Check now**, **Download update**, and **Install and restart** flow
+remains available and requires confirmation before installation.
 
 Before any replacement, the application verifies an Ed25519 signature over the
 raw manifest, validates the GitHub release URL, downloads with strict size
@@ -34,10 +37,12 @@ update. The workflow also refuses a tag unless the tag version exactly matches
 `CMakeLists.txt`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 
 An explicitly pushed `dev-vMAJOR.MINOR.PATCH` tag publishes a separate unsigned
-Debug portable ZIP as a GitHub pre-release. This bootstrap channel exists for
-development and personal testing before production signing is configured. It
-does not publish an update manifest, is never considered by automatic update
-checks, and does not weaken the fail-closed `v*` release workflow.
+Debug portable ZIP as a GitHub pre-release. Its package manifest is signed with
+an isolated development Ed25519 key and advanced through the `development`
+channel release, so development portable copies support the same automatic
+check/download and manual install flow. Development copies never consume stable
+metadata, stable copies never consume development metadata, and the development
+channel does not weaken the fail-closed `v*` release workflow.
 
 ## One-time GitHub repository setup
 
@@ -59,6 +64,14 @@ Configure these GitHub Actions secrets:
 - `METAPLASIA_UPDATE_PRIVATE_KEY_PEM_B64`: the second Base64 value.
 - `METAPLASIA_CODESIGN_PFX_B64`: Base64 of the Authenticode PFX used for all five binaries.
 - `METAPLASIA_CODESIGN_PASSWORD`: the PFX password.
+
+Generate a second, independent Ed25519 key for development updates and configure:
+
+- `METAPLASIA_DEVELOPMENT_UPDATE_PUBLIC_KEY`: Base64 of the raw 32-byte public key.
+- `METAPLASIA_DEVELOPMENT_UPDATE_PRIVATE_KEY_PEM_B64`: Base64 of its private PEM.
+
+Never reuse either private key across channels. A compromised development key
+must not authorize a stable update.
 
 Create a GitHub environment named `release`, require approval for it, and
 protect the `v*` tag pattern so an ordinary repository write cannot silently
@@ -85,8 +98,8 @@ creates the ZIP, creates and signs `portable-update.json`, and publishes the
 assets to a GitHub Release. Existing updater-enabled portable copies will then
 see the release through the automatic or manual check.
 
-Before the four signing secrets are configured, a development portable build
-can be published independently:
+A development portable build can be published independently from the stable
+Authenticode configuration:
 
 ```powershell
 git tag dev-v0.2.0
@@ -94,8 +107,16 @@ git push origin dev-v0.2.0
 ```
 
 This creates a clearly labelled GitHub pre-release containing the five-file
-Debug runtime and `SHA256SUMS.txt`; it is not a substitute for the signed
-automatic-update channel.
+Debug runtime, checksum, signed manifest, and manifest signature. After the
+versioned package exists, the workflow advances the signed metadata on the
+`development` channel release. Development copies then discover it through
+automatic checks or the **Check now** button and install it through the same
+transactional portable replacement helper.
+
+The original `dev-v0.1.0` package was published without an embedded development
+key and cannot be changed retroactively. It requires one manual replacement with
+`dev-v0.1.1` or newer. Every development version from `0.1.1` onward can update
+within the development channel.
 
 Versions distributed before this update client exists require one final manual
 replacement with an updater-enabled signed release. Subsequent versions update

@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=METAPLASIA_UPDATE_CHANNEL");
     println!("cargo:rerun-if-env-changed=METAPLASIA_UPDATE_PUBLIC_KEY");
     println!("cargo:rerun-if-changed=icons/icon.ico");
     println!("cargo:rerun-if-changed=icons/icon.png");
