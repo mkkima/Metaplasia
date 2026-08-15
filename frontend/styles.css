@@ -310,6 +310,8 @@ svg {
 .settings-title h2 { margin: 0 0 4px; font-size: 17px; }
 
 .overview-targets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.startup-section { margin-top: 28px; }
+.startup-mode-badge { justify-self: end; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 5px; color: #fff; font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; white-space: nowrap; }
 .overview-card {
   position: relative;
   min-height: 176px;

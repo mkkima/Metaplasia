@@ -36,8 +36,16 @@ is no development server or network service in a production build. JavaScript
 invokes a narrow set of typed Rust commands. Blocking named-pipe transactions
 and host startup run on Tauri's blocking worker pool, never on the WebView event
 loop. The frontend polls immutable snapshots, updates existing DOM nodes, and
-never owns process handles or injection details. Closing the UI does not stop
-the host, so customizations do not depend on an open window.
+never owns process handles or injection details.
+
+At background startup the control center creates only its native event loop and
+tray icon. The WebView is created on demand and destroyed when its window is
+closed, while the independently supervised host keeps saved customizations
+active. A local control-center mutex and activation event route normal EXE
+launches to the running tray process; the host retains its separate per-session
+mutex. Current-user autostart stores only the quoted portable executable path
+plus `--background` in the standard HKCU Run key. See
+[Startup and tray lifecycle](STARTUP.md).
 
 The only outbound runtime network path is the portable update client. It reads
 bounded assets from the project's GitHub Releases channel, verifies the

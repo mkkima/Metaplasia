@@ -88,6 +88,8 @@ const elements = {
   diagnosticsTargets: document.querySelector("#diagnostic-targets"),
   activeCount: document.querySelector("#overview-active-count"),
   overviewSummary: document.querySelector("#overview-summary"),
+  startupEnabled: document.querySelector("#startup-enabled"),
+  startupDetail: document.querySelector("#startup-detail"),
   refreshDiagnostics: document.querySelector("#refresh-diagnostics"),
   xamlSummary: document.querySelector("#xaml-summary"),
   xamlSectionTitle: document.querySelector("#xaml-section-title"),
@@ -134,6 +136,8 @@ const runtime = {
   route: "overview",
   state: null,
   refreshing: false,
+  startupBusy: false,
+  startupStatus: null,
   pending: new Set(),
   pollTimer: 0,
   demo: loadDemoSettings(),
@@ -362,6 +366,7 @@ function bindControls() {
   });
 
   elements.refreshDiagnostics.addEventListener("click", refreshDiagnostics);
+  elements.startupEnabled?.addEventListener("change", setStartupEnabled);
   document.querySelectorAll("[data-xaml-target]").forEach((button) => {
     button.addEventListener("click", () => {
       runtime.xamlTarget = button.dataset.xamlTarget;
@@ -398,6 +403,53 @@ function bindControls() {
       runtime.rollbackVersion = null;
     }
   });
+}
+
+function renderStartupStatus(status = runtime.startupStatus) {
+  if (!status || !elements.startupEnabled || !elements.startupDetail) return;
+  runtime.startupStatus = status;
+  elements.startupEnabled.checked = Boolean(status.enabled);
+  elements.startupEnabled.disabled = runtime.startupBusy;
+  elements.startupDetail.textContent = status.detail || (status.enabled
+    ? "Starts in the system tray at sign-in."
+    : "Autostart is disabled.");
+}
+
+async function refreshStartupStatus(silent = false) {
+  if (!invoke || runtime.startupBusy) return;
+  runtime.startupBusy = true;
+  if (elements.startupEnabled) elements.startupEnabled.disabled = true;
+  try {
+    runtime.startupStatus = await invoke("get_startup_status");
+    renderStartupStatus();
+  } catch (error) {
+    if (elements.startupDetail) elements.startupDetail.textContent = readError(error);
+    if (!silent) showToast(readError(error), true);
+  } finally {
+    runtime.startupBusy = false;
+    if (elements.startupEnabled) elements.startupEnabled.disabled = false;
+  }
+}
+
+async function setStartupEnabled() {
+  if (!invoke || runtime.startupBusy || !elements.startupEnabled) return;
+  const enabled = elements.startupEnabled.checked;
+  runtime.startupBusy = true;
+  elements.startupEnabled.disabled = true;
+  try {
+    runtime.startupStatus = await invoke("set_startup_enabled", { enabled });
+    renderStartupStatus();
+    showToast(enabled
+      ? "Metaplasia will start in the system tray with Windows."
+      : "Metaplasia autostart is disabled.", false);
+  } catch (error) {
+    elements.startupEnabled.checked = Boolean(runtime.startupStatus?.enabled);
+    if (elements.startupDetail) elements.startupDetail.textContent = readError(error);
+    showToast(readError(error), true);
+  } finally {
+    runtime.startupBusy = false;
+    elements.startupEnabled.disabled = false;
+  }
 }
 
 function loadAutomaticUpdates() {
@@ -1547,6 +1599,7 @@ function start() {
     return;
   }
   refreshState(true);
+  refreshStartupStatus(true);
   schedulePolling();
   initializePortableUpdates();
 }

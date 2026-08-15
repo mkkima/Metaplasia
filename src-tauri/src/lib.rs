@@ -3,15 +3,20 @@ mod portable_update;
 mod protocol;
 mod start_menu_policy;
 mod update_history;
+mod windows_integration;
 
 use protocol::{MessageKind, PipeClient, Reader, expect_kind, write_string, write_u32};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{Manager, WebviewWindow};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::utils::config::Color;
+use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const PIPE_TIMEOUT: Duration = Duration::from_millis(2_500);
 const HOST_LAUNCH_COOLDOWN: Duration = Duration::from_secs(5);
@@ -21,6 +26,8 @@ const DWMWA_BORDER_COLOR: u32 = 34;
 const DWMWA_CAPTION_COLOR: u32 = 35;
 const DWMWA_TEXT_COLOR: u32 = 36;
 static UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+const TRAY_OPEN_ID: &str = "open";
+const TRAY_EXIT_ID: &str = "exit";
 
 #[link(name = "dwmapi")]
 unsafe extern "system" {
@@ -177,6 +184,16 @@ async fn get_app_state() -> AppState {
     tauri::async_runtime::spawn_blocking(query_app_state)
         .await
         .unwrap_or_else(|error| disconnected_state(format!("State worker failed: {error}")))
+}
+
+#[tauri::command]
+fn get_startup_status() -> Result<windows_integration::StartupStatus, String> {
+    windows_integration::startup_status()
+}
+
+#[tauri::command]
+fn set_startup_enabled(enabled: bool) -> Result<windows_integration::StartupStatus, String> {
+    windows_integration::set_startup_enabled(enabled)
 }
 
 #[tauri::command]
@@ -781,10 +798,143 @@ fn is_regular_file(path: &Path) -> bool {
     path.metadata().is_ok_and(|metadata| metadata.is_file())
 }
 
-fn show_window(window: &WebviewWindow) {
+fn show_window(window: &WebviewWindow) -> Result<(), String> {
     apply_dark_window_frame(window);
-    let _ = window.show();
-    let _ = window.set_focus();
+    window
+        .unminimize()
+        .map_err(|error| format!("Could not restore the Metaplasia window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("Could not show the Metaplasia window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("Could not focus the Metaplasia window: {error}"))
+}
+
+fn show_or_create_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    static WINDOW_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = WINDOW_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "The control-center window lock is poisoned")?;
+    if let Some(window) = app.get_webview_window("main") {
+        return show_window(&window);
+    }
+
+    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("Metaplasia")
+        .inner_size(1500.0, 860.0)
+        .min_inner_size(1120.0, 680.0)
+        .center()
+        .prevent_overflow()
+        .resizable(true)
+        .maximizable(true)
+        .minimizable(true)
+        .decorations(true)
+        .theme(Some(tauri::Theme::Dark))
+        .background_color(Color(0, 0, 0, 255))
+        .build()
+        .map_err(|error| format!("Could not create the Metaplasia window: {error}"))?;
+    show_window(&window)
+}
+
+fn request_main_window(sender: &SyncSender<()>) {
+    match sender.try_send(()) {
+        Ok(()) | Err(TrySendError::Full(())) => {}
+        Err(TrySendError::Disconnected(())) => {
+            output_debug_message("The window-open worker is unavailable");
+        }
+    }
+}
+
+fn start_main_window_worker(app: tauri::AppHandle) -> Result<SyncSender<()>, String> {
+    let (sender, receiver) = sync_channel(1);
+    std::thread::Builder::new()
+        .name("metaplasia-window-open".into())
+        .spawn(move || {
+            while receiver.recv().is_ok() {
+                if let Err(error) = show_or_create_main_window(&app) {
+                    output_debug_message(&error);
+                }
+            }
+        })
+        .map_err(|error| format!("Could not start the window-open worker: {error}"))?;
+    Ok(sender)
+}
+
+fn setup_tray(app: &tauri::App, window_sender: SyncSender<()>) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, TRAY_OPEN_ID, "Open Metaplasia", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let exit = MenuItem::with_id(app, TRAY_EXIT_ID, "Exit Metaplasia", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &separator, &exit])?;
+    let icon = app.default_window_icon().cloned().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the embedded Metaplasia icon is unavailable",
+        )
+    })?;
+    TrayIconBuilder::with_id("metaplasia-tray")
+        .menu(&menu)
+        .icon(icon)
+        .tooltip("Metaplasia")
+        .show_menu_on_left_click(false)
+        .on_menu_event({
+            let window_sender = window_sender.clone();
+            move |app, event| match event.id().as_ref() {
+                TRAY_OPEN_ID => request_main_window(&window_sender),
+                TRAY_EXIT_ID => app.exit(0),
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(move |_tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                request_main_window(&window_sender);
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+fn start_activation_listener(
+    window_sender: SyncSender<()>,
+    event: windows_integration::ActivationEvent,
+) -> Result<(), String> {
+    std::thread::Builder::new()
+        .name("metaplasia-instance-activation".into())
+        .spawn(move || {
+            loop {
+                if let Err(error) = event.wait() {
+                    output_debug_message(&error);
+                    return;
+                }
+                request_main_window(&window_sender);
+            }
+        })
+        .map(|_| ())
+        .map_err(|error| format!("Could not start the single-instance listener: {error}"))
+}
+
+fn output_debug_message(message: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let message: Vec<u16> = std::ffi::OsStr::new(&format!("[Metaplasia UI] {message}\n"))
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe extern "system" {
+            fn OutputDebugStringW(message: *const u16);
+        }
+        // SAFETY: message is a valid null-terminated UTF-16 string.
+        unsafe { OutputDebugStringW(message.as_ptr()) };
+    }
 }
 
 fn apply_dark_window_frame(window: &WebviewWindow) {
@@ -825,10 +975,24 @@ fn apply_dark_window_frame(window: &WebviewWindow) {
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let background = windows_integration::is_background_launch();
+    let instance = match windows_integration::acquire_single_instance(!background) {
+        Ok(windows_integration::InstanceDisposition::Primary(instance)) => instance,
+        Ok(windows_integration::InstanceDisposition::Secondary) => return,
+        Err(error) => {
+            output_debug_message(&error);
+            return;
+        }
+    };
+    let (instance_lifetime, activation_event) = instance.into_parts();
+
+    let app = tauri::Builder::default()
+        .manage(instance_lifetime)
         .manage(portable_update::UpdateManager::default())
         .invoke_handler(tauri::generate_handler![
             get_app_state,
+            get_startup_status,
+            set_startup_enabled,
             set_target_enabled,
             set_customization,
             set_start_all_apps_hidden,
@@ -843,14 +1007,30 @@ pub fn run() {
             portable_update::resume_portable_update_version,
             portable_update::clear_portable_update_cache
         ])
-        .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                show_window(&window);
+        .setup(move |app| {
+            let window_sender =
+                start_main_window_worker(app.handle().clone()).map_err(std::io::Error::other)?;
+            setup_tray(app, window_sender.clone())?;
+            if let Err(error) = ensure_host_started() {
+                output_debug_message(&error);
             }
+            if !background {
+                show_or_create_main_window(app.handle()).map_err(std::io::Error::other)?;
+            }
+            start_activation_listener(window_sender, activation_event)
+                .map_err(std::io::Error::other)?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run Metaplasia");
+        .build(tauri::generate_context!())
+        .expect("failed to build Metaplasia");
+    app.run(|_app, event| {
+        if let tauri::RunEvent::ExitRequested {
+            code: None, api, ..
+        } = event
+        {
+            api.prevent_exit();
+        }
+    });
 }
 
 pub fn run_portable_update_helper_from_args() -> Option<i32> {

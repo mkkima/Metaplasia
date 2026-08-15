@@ -119,6 +119,13 @@ Start the control center; it starts the per-session host automatically:
 .\build\debug\bin\metaplasia.exe
 ```
 
+Enable **Start with Windows** on the Overview page to register the current
+portable path for the current user. At sign-in Metaplasia starts with
+`--background`, restores the saved native settings, and stays in the system
+tray without creating WebView2. Launching the EXE again opens the existing
+instance; closing the window unloads the UI and leaves the tray and native host
+running. See [Startup and tray lifecycle](docs/STARTUP.md).
+
 The CLI expects a running host:
 
 ```powershell
@@ -158,7 +165,8 @@ uses outbound HTTPS solely for signed assets from this repository's GitHub
 Releases. The **Updates** page exposes the current channel, bounded local
 published version history, cache cleanup, manual controls, and same-channel signed
 rollback. There is no telemetry, cloud service, network listener, local web
-server, installer, or background update service. See [Portable updates](docs/UPDATES.md).
+server, installer, Windows service, or background update service. See
+[Portable updates](docs/UPDATES.md).
 The control center loads static HTML, CSS, and JavaScript bundled inside
 `metaplasia.exe`. CMake may fetch the pinned MinHook source and Cargo may
 download dependencies fixed by `src-tauri/Cargo.lock` during a developer build.

@@ -110,6 +110,11 @@
           </div>
           <div class="section-heading"><div><h2>Shell targets</h2><p>Open a surface to configure it.</p></div></div>
           <div class="overview-targets" id="overview-targets"></div>
+          <section class="settings-section startup-section" aria-labelledby="startup-title">
+            <div class="settings-title"><h2 id="startup-title">Startup &amp; tray</h2><p>Keep saved shell customizations active after Windows sign-in without loading the UI.</p></div>
+            <div class="setting-row"><div><strong>Start with Windows</strong><p id="startup-detail">Checking the current-user startup setting…</p></div><label class="switch"><input id="startup-enabled" type="checkbox" aria-label="Start Metaplasia with Windows in the system tray"><span></span></label></div>
+            <div class="setting-row startup-behavior"><div><strong>Resource-efficient tray mode</strong><p>Background startup does not create WebView2. Closing the window unloads the UI while the tray and native host keep your saved settings active.</p></div><span class="startup-mode-badge">Native background</span></div>
+          </section>
         </section>
 
         <section class="page" data-page="customizations" aria-labelledby="customizations-title">
