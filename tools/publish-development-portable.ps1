@@ -141,7 +141,7 @@ function Add-GitHubReleaseAsset {
     $name = [Uri]::EscapeDataString((Split-Path -Leaf $Path))
     $parameters = @{
         Method = 'Post'
-        Uri = "$baseUrl?name=$name"
+        Uri = "${baseUrl}?name=$name"
         Headers = $Headers
         ContentType = $ContentType
         InFile = $Path
