@@ -137,6 +137,13 @@ impl UpdateChannel {
                 Self::Development => release.prerelease,
             }
     }
+
+    fn accepts_signed_version(self, version: &Version) -> bool {
+        match self {
+            Self::Stable => true,
+            Self::Development => version >= &Version::new(0, 1, 3),
+        }
+    }
 }
 
 struct UpdateConfiguration {
@@ -654,7 +661,7 @@ fn parse_rollback_catalog(
         let Ok(version) = canonical_version(version_text, "release catalog version") else {
             continue;
         };
-        if version >= *current {
+        if version >= *current || !channel.accepts_signed_version(&version) {
             continue;
         }
         let names: BTreeSet<&str> = release
@@ -769,7 +776,12 @@ fn fetch_versioned_update(
     configuration: &UpdateConfiguration,
     requested_version: &str,
 ) -> Result<PendingUpdate, String> {
-    canonical_version(requested_version, "rollback version")?;
+    let requested = canonical_version(requested_version, "rollback version")?;
+    if !configuration.channel.accepts_signed_version(&requested) {
+        return Err(
+            "The requested rollback belongs to an obsolete update-signing trust epoch".into(),
+        );
+    }
     let tag = configuration.channel.version_tag(requested_version);
     let base = format!("https://github.com/mkkima/Metaplasia/releases/download/{tag}");
     let client = update_client()?;
@@ -1882,6 +1894,8 @@ mod tests {
     #[test]
     fn rollback_catalog_requires_complete_signed_channel_assets() {
         let catalog = br#"[
+          {"tag_name":"dev-v0.1.3","draft":false,"prerelease":true,"published_at":"2026-08-16T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.3","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.3-windows-x64-portable-dev.zip"}]},
+          {"tag_name":"dev-v0.1.2","draft":false,"prerelease":true,"published_at":"2026-08-15T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.2","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.2-windows-x64-portable-dev.zip"}]},
           {"tag_name":"dev-v0.1.1","draft":false,"prerelease":true,"published_at":"2026-08-15T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.1","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.1-windows-x64-portable-dev.zip"}]},
           {"tag_name":"dev-v0.1.0","draft":false,"prerelease":true,"published_at":"2026-08-14T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.0","assets":[{"name":"Metaplasia-0.1.0-windows-x64-portable-dev.zip"}]},
           {"tag_name":"v0.1.0","draft":false,"prerelease":false,"published_at":"2026-08-13T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/v0.1.0","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.0-windows-x64-portable.zip"}]}
@@ -1889,11 +1903,22 @@ mod tests {
         let releases = parse_rollback_catalog(
             catalog,
             UpdateChannel::Development,
-            &Version::parse("0.1.2").unwrap(),
+            &Version::parse("0.1.4").unwrap(),
         )
         .unwrap();
         assert_eq!(releases.len(), 1);
-        assert_eq!(releases[0].version, "0.1.1");
+        assert_eq!(releases[0].version, "0.1.3");
+    }
+
+    #[test]
+    fn development_trust_epoch_rejects_pre_rotation_releases() {
+        assert!(
+            !UpdateChannel::Development.accepts_signed_version(&Version::parse("0.1.2").unwrap())
+        );
+        assert!(
+            UpdateChannel::Development.accepts_signed_version(&Version::parse("0.1.3").unwrap())
+        );
+        assert!(UpdateChannel::Stable.accepts_signed_version(&Version::parse("0.1.0").unwrap()));
     }
 
     #[test]

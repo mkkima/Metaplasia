@@ -145,8 +145,11 @@ the channel metadata signature-first. Omitting `-Publish` performs all local
 validation and writes assets below `out/releases` without changing GitHub.
 
 The original `dev-v0.1.0` package was published without an embedded development
-key and cannot be changed retroactively. It requires one manual replacement with
-`dev-v0.1.1` or newer. Every development version from `0.1.1` onward can update
+key and cannot be changed retroactively. Development versions `0.1.1` and
+`0.1.2` trusted a signing key that was available only to the retired GitHub
+Actions publisher. Version `0.1.3` establishes the locally held development
+trust anchor and therefore requires one manual portable replacement from any
+older build. Development versions from `0.1.3` onward update automatically
 within the development channel.
 
 Versions distributed before this update client exists require one final manual
@@ -154,11 +157,11 @@ replacement with an updater-enabled signed release. Subsequent versions update
 through the portable channel.
 
 Rollback has the same compatibility boundary. Releases without a signed
-versioned manifest are intentionally omitted, so `dev-v0.1.0` cannot be used as
-an in-app rollback target. The first development rollback target is
-`dev-v0.1.1`.
+versioned manifest and releases from an obsolete signing trust epoch are
+intentionally omitted. The first rollback target under the current development
+trust anchor is `dev-v0.1.3`.
 
-Do not rotate the Ed25519 key or remove manifest schema `1` without first
-shipping a bridge release that trusts both channels. Older portable copies
-know only their embedded public key and supported manifest schema; changing
-either abruptly would permanently strand those versions.
+Future Ed25519 rotations or manifest-schema changes require a bridge release
+that trusts both generations. The `0.1.3` development rotation is the explicit
+exception: the previous private key was unavailable outside the retired
+publisher, so `0.1.1` and `0.1.2` require the documented manual transition.
