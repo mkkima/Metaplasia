@@ -30,6 +30,7 @@ const ROUTE_TITLES = {
   start: "Start menu",
   explorer: "File Explorer",
   "notifications-audio": "Notifications & audio",
+  updates: "Updates",
   diagnostics: "Diagnostics",
   about: "About"
 };
@@ -102,6 +103,10 @@ const elements = {
   notificationPreview: document.querySelector("[data-notification-preview]"),
   audioPreview: document.querySelector("[data-audio-preview]"),
   applicationVersion: document.querySelector("#application-version"),
+  updateCurrentVersion: document.querySelector("#update-current-version"),
+  updateCurrentChannel: document.querySelector("#update-current-channel"),
+  updateCacheSize: document.querySelector("#update-cache-size"),
+  updateStoragePath: document.querySelector("#update-storage-path"),
   updateChannelLabel: document.querySelector("#update-channel-label"),
   automaticUpdates: document.querySelector("#automatic-updates"),
   checkUpdates: document.querySelector("#check-updates"),
@@ -111,7 +116,17 @@ const elements = {
   updateStatusTitle: document.querySelector("#update-status-title"),
   updateStatusDetail: document.querySelector("#update-status-detail"),
   updateNotes: document.querySelector("#update-notes"),
-  updateConfirmDialog: document.querySelector("#update-confirm-dialog")
+  updateSkip: document.querySelector("#update-skip"),
+  updateSkipTitle: document.querySelector("#update-skip-title"),
+  resumeSkippedUpdate: document.querySelector("#resume-skipped-update"),
+  refreshUpdateHistory: document.querySelector("#refresh-update-history"),
+  clearUpdateCache: document.querySelector("#clear-update-cache"),
+  updateHistoryList: document.querySelector("#update-history-list"),
+  rollbackList: document.querySelector("#rollback-list"),
+  rollbackSummary: document.querySelector("#rollback-summary"),
+  updateConfirmDialog: document.querySelector("#update-confirm-dialog"),
+  rollbackConfirmDialog: document.querySelector("#rollback-confirm-dialog"),
+  rollbackConfirmDetail: document.querySelector("#rollback-confirm-detail")
 };
 
 const runtime = {
@@ -126,6 +141,9 @@ const runtime = {
   updateStatus: null,
   updateBusy: false,
   updateTimer: 0,
+  updateHistory: null,
+  updateHistoryBusy: false,
+  rollbackVersion: null,
   xamlTarget: "taskbar",
   diagnosticLogs: [],
   diagnosticLogFingerprint: "",
@@ -193,6 +211,9 @@ function navigate(route) {
   if (route === "diagnostics") {
     updateDiagnosticCards();
     refreshDiagnosticLogs(true);
+  } else if (route === "updates") {
+    if (runtime.updateHistory) renderUpdateHistory();
+    else refreshUpdateHistory(true);
   }
 }
 
@@ -200,8 +221,10 @@ function bindNavigation() {
   document.addEventListener("click", (event) => {
     const routeButton = event.target.closest("[data-route]");
     const targetButton = event.target.closest("[data-open-target]");
+    const rollbackButton = event.target.closest("[data-rollback-version]");
     if (routeButton) navigate(routeButton.dataset.route);
     if (targetButton) navigate(targetButton.dataset.openTarget);
+    if (rollbackButton) confirmRollback(rollbackButton.dataset.rollbackVersion);
   });
 }
 
@@ -364,6 +387,16 @@ function bindControls() {
   elements.updateConfirmDialog?.addEventListener("close", () => {
     if (elements.updateConfirmDialog.returnValue === "install") installPortableUpdate();
   });
+  elements.refreshUpdateHistory?.addEventListener("click", () => refreshUpdateHistory(false));
+  elements.clearUpdateCache?.addEventListener("click", clearPortableUpdateCache);
+  elements.resumeSkippedUpdate?.addEventListener("click", resumeSkippedUpdate);
+  elements.rollbackConfirmDialog?.addEventListener("close", () => {
+    if (elements.rollbackConfirmDialog.returnValue === "rollback") {
+      performRollback(runtime.rollbackVersion);
+    } else {
+      runtime.rollbackVersion = null;
+    }
+  });
 }
 
 function loadAutomaticUpdates() {
@@ -394,7 +427,10 @@ function updatePhaseTitle(status) {
     case "available": return version ? `Metaplasia ${version} is available` : "An update is available";
     case "downloading": return version ? `Downloading Metaplasia ${version}…` : "Downloading update…";
     case "ready": return version ? `Metaplasia ${version} is ready` : "Update is ready";
-    case "installing": return "Installing the verified portable update…";
+    case "rollback-ready": return version ? `Rollback ${version} is ready` : "Rollback is ready";
+    case "installing": return status?.operation === "rollback"
+      ? "Installing the verified rollback…"
+      : "Installing the verified portable update…";
     case "error": return "Portable update failed";
     default: return "Portable update channel";
   }
@@ -404,6 +440,14 @@ function renderUpdateStatus(status = runtime.updateStatus) {
   if (!status || !elements.updateStatusTitle) return;
   runtime.updateStatus = status;
   elements.applicationVersion.textContent = `Metaplasia ${status.currentVersion}`;
+  if (elements.updateCurrentVersion) {
+    elements.updateCurrentVersion.textContent = `Metaplasia ${status.currentVersion}`;
+  }
+  if (elements.updateCurrentChannel) {
+    elements.updateCurrentChannel.textContent = status.channel === "development"
+      ? "Development portable channel"
+      : "Stable portable channel";
+  }
   if (elements.updateChannelLabel) {
     elements.updateChannelLabel.textContent = status.channel === "development"
       ? "Development portable channel"
@@ -413,8 +457,14 @@ function renderUpdateStatus(status = runtime.updateStatus) {
   elements.updateStatusDetail.textContent = status.detail || "Ready to check GitHub Releases.";
   elements.updateNotes.textContent = status.notes || "";
   elements.updateNotes.hidden = !status.notes;
+  if (elements.updateSkip) {
+    elements.updateSkip.hidden = !status.skippedVersion;
+    elements.updateSkipTitle.textContent = status.skippedVersion
+      ? `Version ${status.skippedVersion} is skipped`
+      : "A version is skipped";
+  }
   const isError = status.phase === "error";
-  const isPositive = ["current", "available", "ready"].includes(status.phase);
+  const isPositive = ["current", "available", "ready", "rollback-ready"].includes(status.phase);
   elements.updateStatusBar.classList.toggle("is-error", isError);
   elements.updateStatusBar.classList.toggle("is-active", isPositive);
 
@@ -425,6 +475,8 @@ function renderUpdateStatus(status = runtime.updateStatus) {
   elements.installUpdate.hidden = status.phase !== "ready" || !status.downloaded;
   elements.installUpdate.disabled = !enabled;
   elements.automaticUpdates.disabled = !status.configured || runtime.updateBusy;
+  if (elements.clearUpdateCache) elements.clearUpdateCache.disabled = runtime.updateBusy;
+  if (elements.resumeSkippedUpdate) elements.resumeSkippedUpdate.disabled = runtime.updateBusy;
 }
 
 async function checkForPortableUpdate(automatic) {
@@ -467,6 +519,8 @@ async function checkForPortableUpdate(automatic) {
   } finally {
     runtime.updateBusy = false;
     renderUpdateStatus();
+    renderUpdateHistory();
+    if (runtime.route === "updates") refreshUpdateHistory(true);
   }
 }
 
@@ -490,6 +544,8 @@ async function downloadPortableUpdate() {
   } finally {
     runtime.updateBusy = false;
     renderUpdateStatus();
+    renderUpdateHistory();
+    if (runtime.route === "updates") refreshUpdateHistory(true);
   }
 }
 
@@ -515,12 +571,244 @@ async function installPortableUpdate() {
   }
 }
 
+function formatUpdateBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "Empty";
+  const units = ["B", "KB", "MB", "GB"];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${amount >= 10 || unit === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`;
+}
+
+function formatUpdateTime(timestampUnix) {
+  const timestamp = Number(timestampUnix) * 1000;
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "Unknown time";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(timestamp));
+}
+
+function historyActionLabel(entry) {
+  if (entry.action === "rollback") return entry.outcome === "success" ? "Rolled back" : "Rollback failed";
+  if (entry.action === "update") return entry.outcome === "success" ? "Updated" : "Update failed";
+  return "Detected";
+}
+
+function renderUpdateHistory(snapshot = runtime.updateHistory) {
+  if (!snapshot) return;
+  runtime.updateHistory = snapshot;
+  if (elements.updateCurrentVersion && snapshot.currentVersion) {
+    elements.updateCurrentVersion.textContent = `Metaplasia ${snapshot.currentVersion}`;
+  }
+  if (elements.updateCurrentChannel && snapshot.channel) {
+    elements.updateCurrentChannel.textContent = snapshot.channel === "development"
+      ? "Development portable channel"
+      : "Stable portable channel";
+  }
+  if (runtime.updateStatus && runtime.updateStatus.skippedVersion !== snapshot.skippedVersion) {
+    runtime.updateStatus = { ...runtime.updateStatus, skippedVersion: snapshot.skippedVersion || null };
+    renderUpdateStatus();
+  }
+  if (elements.updateCacheSize) elements.updateCacheSize.textContent = formatUpdateBytes(snapshot.cacheBytes);
+  if (elements.updateStoragePath) {
+    elements.updateStoragePath.textContent = snapshot.storagePath || "%LOCALAPPDATA%\\Metaplasia\\updates";
+    elements.updateStoragePath.title = elements.updateStoragePath.textContent;
+  }
+  if (elements.rollbackSummary) elements.rollbackSummary.textContent = snapshot.catalogDetail || "Signed release catalog loaded.";
+
+  if (elements.updateHistoryList) {
+    elements.updateHistoryList.replaceChildren();
+    if (!snapshot.entries?.length) {
+      const empty = document.createElement("p");
+      empty.className = "update-empty";
+      empty.textContent = "No installation events recorded yet.";
+      elements.updateHistoryList.append(empty);
+    } else {
+      snapshot.entries.forEach((entry) => {
+        const article = document.createElement("article");
+        article.className = `update-history-entry${entry.outcome === "failed" ? " is-failed" : ""}`;
+        const marker = document.createElement("span");
+        marker.className = "update-history-marker";
+        const copy = document.createElement("div");
+        copy.className = "update-history-copy";
+        const title = document.createElement("strong");
+        title.textContent = entry.previousVersion && entry.previousVersion !== entry.version
+          ? `${entry.previousVersion} → ${entry.version}`
+          : `Metaplasia ${entry.version}`;
+        const detail = document.createElement("p");
+        detail.textContent = entry.detail || historyActionLabel(entry);
+        copy.append(title, detail);
+        const meta = document.createElement("div");
+        meta.className = "update-history-meta";
+        const badge = document.createElement("span");
+        badge.className = "update-history-badge";
+        badge.textContent = historyActionLabel(entry);
+        const time = document.createElement("time");
+        time.textContent = formatUpdateTime(entry.timestampUnix);
+        meta.append(badge, time);
+        article.append(marker, copy, meta);
+        elements.updateHistoryList.append(article);
+      });
+    }
+  }
+
+  if (elements.rollbackList) {
+    elements.rollbackList.replaceChildren();
+    if (!snapshot.availableRollbacks?.length) {
+      const empty = document.createElement("p");
+      empty.className = "update-empty";
+      empty.textContent = snapshot.catalogDetail || "No older signed releases are available.";
+      elements.rollbackList.append(empty);
+    } else {
+      snapshot.availableRollbacks.forEach((release) => {
+        const article = document.createElement("article");
+        article.className = "rollback-entry";
+        const marker = document.createElement("span");
+        marker.className = "update-history-marker";
+        const copy = document.createElement("div");
+        copy.className = "rollback-copy";
+        const title = document.createElement("strong");
+        title.textContent = `Metaplasia ${release.version}`;
+        const detail = document.createElement("p");
+        const published = Date.parse(release.publishedAt || "");
+        detail.textContent = Number.isFinite(published)
+          ? `Published ${new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(published))}`
+          : "Signed portable release";
+        copy.append(title, detail);
+        const button = document.createElement("button");
+        button.className = "secondary-button";
+        button.type = "button";
+        button.dataset.rollbackVersion = release.version;
+        button.disabled = runtime.updateBusy;
+        button.textContent = "Rollback";
+        article.append(marker, copy, button);
+        elements.rollbackList.append(article);
+      });
+    }
+  }
+}
+
+async function refreshUpdateHistory(silent = false) {
+  if (!invoke || runtime.updateHistoryBusy) return;
+  runtime.updateHistoryBusy = true;
+  if (elements.refreshUpdateHistory) elements.refreshUpdateHistory.disabled = true;
+  try {
+    runtime.updateHistory = await invoke("get_portable_update_history");
+    renderUpdateHistory();
+  } catch (error) {
+    if (!silent) showToast(readError(error), true);
+    if (elements.rollbackSummary) elements.rollbackSummary.textContent = readError(error);
+  } finally {
+    runtime.updateHistoryBusy = false;
+    if (elements.refreshUpdateHistory) elements.refreshUpdateHistory.disabled = false;
+  }
+}
+
+function confirmRollback(version) {
+  if (runtime.updateBusy || !/^\d+\.\d+\.\d+$/.test(version || "")) return;
+  const allowed = runtime.updateHistory?.availableRollbacks?.some((release) => release.version === version);
+  if (!allowed) {
+    showToast("Refresh the signed rollback catalog before selecting a version.", true);
+    return;
+  }
+  runtime.rollbackVersion = version;
+  if (elements.rollbackConfirmDetail) {
+    elements.rollbackConfirmDetail.textContent = `Metaplasia ${version} will replace the current ${runtime.updateStatus?.currentVersion || "portable"} binary set after its signature and package hash are verified.`;
+  }
+  elements.rollbackConfirmDialog?.showModal();
+}
+
+async function performRollback(version) {
+  if (!invoke || runtime.updateBusy || !/^\d+\.\d+\.\d+$/.test(version || "")) return;
+  const automaticWasEnabled = elements.automaticUpdates.checked;
+  elements.automaticUpdates.checked = false;
+  saveAutomaticUpdates(false);
+  runtime.updateBusy = true;
+  runtime.updateStatus = {
+    ...(runtime.updateStatus || {}),
+    availableVersion: version,
+    operation: "rollback",
+    phase: "downloading",
+    detail: `Downloading and verifying signed rollback ${version}.`,
+    downloaded: false
+  };
+  renderUpdateStatus();
+  renderUpdateHistory();
+  try {
+    runtime.updateStatus = await invoke("prepare_portable_rollback", { version });
+    runtime.updateStatus = {
+      ...runtime.updateStatus,
+      phase: "installing",
+      detail: `Installing rollback ${version} and restarting Windows shell components.`
+    };
+    renderUpdateStatus();
+    await invoke("apply_portable_update");
+  } catch (error) {
+    elements.automaticUpdates.checked = automaticWasEnabled;
+    saveAutomaticUpdates(automaticWasEnabled);
+    runtime.updateBusy = false;
+    runtime.updateStatus = {
+      ...(runtime.updateStatus || {}),
+      phase: "error",
+      detail: readError(error),
+      downloaded: false
+    };
+    renderUpdateStatus();
+    renderUpdateHistory();
+    showToast(readError(error), true);
+  } finally {
+    runtime.rollbackVersion = null;
+  }
+}
+
+async function clearPortableUpdateCache() {
+  if (!invoke || runtime.updateBusy) return;
+  runtime.updateBusy = true;
+  renderUpdateStatus();
+  try {
+    await invoke("clear_portable_update_cache");
+    runtime.updateStatus = await invoke("get_portable_update_status");
+    await refreshUpdateHistory(true);
+    showToast("Downloaded update files were cleared.", false);
+  } catch (error) {
+    showToast(readError(error), true);
+  } finally {
+    runtime.updateBusy = false;
+    renderUpdateStatus();
+    renderUpdateHistory();
+  }
+}
+
+async function resumeSkippedUpdate() {
+  if (!invoke || runtime.updateBusy) return;
+  runtime.updateBusy = true;
+  renderUpdateStatus();
+  try {
+    await invoke("resume_portable_update_version");
+    runtime.updateStatus = await invoke("get_portable_update_status");
+    await refreshUpdateHistory(true);
+    showToast("The skipped version is allowed again.", false);
+  } catch (error) {
+    showToast(readError(error), true);
+  } finally {
+    runtime.updateBusy = false;
+    renderUpdateStatus();
+  }
+  if (elements.automaticUpdates.checked) checkForPortableUpdate(true);
+}
+
 async function initializePortableUpdates() {
   if (!invoke || !elements.automaticUpdates) return;
   elements.automaticUpdates.checked = loadAutomaticUpdates();
   try {
     runtime.updateStatus = await invoke("get_portable_update_status");
     renderUpdateStatus();
+    refreshUpdateHistory(true);
     if (runtime.updateStatus.configured && elements.automaticUpdates.checked) {
       window.setTimeout(() => checkForPortableUpdate(true), 2500);
     }

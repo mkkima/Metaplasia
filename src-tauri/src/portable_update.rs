@@ -34,6 +34,7 @@ const UPDATE_PUBLIC_KEY_B64: Option<&str> = option_env!("METAPLASIA_UPDATE_PUBLI
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_SIGNATURE_BYTES: usize = 512;
+const MAX_RELEASE_CATALOG_BYTES: usize = 512 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 768 * 1024 * 1024;
 const MAX_EXPANDED_BYTES: u64 = 1024 * 1024 * 1024;
 const HELPER_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +50,29 @@ const EXPECTED_FILES: [&str; 5] = [
 enum UpdateChannel {
     Stable,
     Development,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum UpdateAction {
+    Update,
+    Rollback,
+}
+
+impl UpdateAction {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Update => "update",
+            Self::Rollback => "rollback",
+        }
+    }
+
+    fn parse(value: &OsStr) -> Result<Self, String> {
+        match value.to_str() {
+            Some("update") => Ok(Self::Update),
+            Some("rollback") => Ok(Self::Rollback),
+            _ => Err("The portable update helper action is invalid".into()),
+        }
+    }
 }
 
 impl UpdateChannel {
@@ -88,6 +112,30 @@ impl UpdateChannel {
             Self::Stable => STABLE_UPDATE_SIGNATURE_URL,
             Self::Development => DEVELOPMENT_UPDATE_SIGNATURE_URL,
         }
+    }
+
+    fn version_tag(self, version: &str) -> String {
+        match self {
+            Self::Stable => format!("v{version}"),
+            Self::Development => format!("dev-v{version}"),
+        }
+    }
+
+    fn archive_name(self, version: &str) -> String {
+        match self {
+            Self::Stable => format!("Metaplasia-{version}-windows-x64-portable.zip"),
+            Self::Development => {
+                format!("Metaplasia-{version}-windows-x64-portable-dev.zip")
+            }
+        }
+    }
+
+    fn accepts_release(self, release: &GitHubRelease) -> bool {
+        !release.draft
+            && match self {
+                Self::Stable => !release.prerelease,
+                Self::Development => release.prerelease,
+            }
     }
 }
 
@@ -144,6 +192,7 @@ struct ReleasePackage {
 
 #[derive(Debug, Clone)]
 struct PendingUpdate {
+    action: UpdateAction,
     manifest: ReleaseManifest,
     manifest_bytes: Vec<u8>,
     signature: Vec<u8>,
@@ -198,12 +247,50 @@ struct LastUpdateResult {
 pub struct UpdateStatus {
     configured: bool,
     channel: String,
+    operation: String,
     current_version: String,
     available_version: Option<String>,
     notes: String,
     phase: String,
     detail: String,
     downloaded: bool,
+    skipped_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    published_at: Option<String>,
+    html_url: String,
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackRelease {
+    version: String,
+    published_at: String,
+    release_url: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateHistorySnapshot {
+    current_version: String,
+    channel: String,
+    skipped_version: Option<String>,
+    entries: Vec<crate::update_history::UpdateHistoryEntry>,
+    available_rollbacks: Vec<RollbackRelease>,
+    catalog_detail: String,
+    cache_bytes: u64,
+    storage_path: String,
 }
 
 impl UpdateManager {
@@ -220,12 +307,14 @@ impl UpdateManager {
             Err(_) => UpdateStatus {
                 configured,
                 channel: channel.into(),
+                operation: "update".into(),
                 current_version: env!("CARGO_PKG_VERSION").into(),
                 available_version: None,
                 notes: String::new(),
                 phase: "error".into(),
                 detail: "The update state lock is poisoned.".into(),
                 downloaded: false,
+                skipped_version: None,
             },
         }
     }
@@ -244,6 +333,25 @@ impl UpdateManager {
 
         match fetch_pending_update(&configuration) {
             Ok(Some(pending)) => {
+                let update_root = update_data_directory()?;
+                let skipped = crate::update_history::skipped_version(
+                    &update_root,
+                    configuration.channel.id(),
+                )?;
+                if skipped.as_deref() == Some(pending.manifest.version.as_str()) {
+                    state.phase = "current";
+                    state.detail = format!(
+                        "Version {} is skipped after a rollback. Resume it manually when ready.",
+                        pending.manifest.version
+                    );
+                    state.pending = None;
+                    return Ok(status_from_state(
+                        &state,
+                        true,
+                        configuration.channel.id(),
+                        None,
+                    ));
+                }
                 state.phase = "available";
                 state.detail =
                     format!("Portable update {} is available.", pending.manifest.version);
@@ -328,6 +436,39 @@ impl UpdateManager {
         }
         Ok(pending)
     }
+
+    fn prepare_rollback(&self, requested_version: &str) -> Result<UpdateStatus, String> {
+        let configuration = update_configuration()?;
+        let current = current_version()?;
+        let requested = canonical_version(requested_version, "rollback version")?;
+        if requested >= current {
+            return Err("A rollback target must be older than the running version".into());
+        }
+
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| "The update state lock is poisoned".to_string())?;
+        state.phase = "downloading";
+        state.detail = format!("Downloading and verifying rollback {requested_version}…");
+        state.pending = None;
+
+        let mut pending = fetch_versioned_update(&configuration, requested_version)?;
+        pending.action = UpdateAction::Rollback;
+        download_pending_update(&mut pending, &configuration)?;
+        state.phase = "rollback-ready";
+        state.detail = format!(
+            "Rollback {} is verified and ready to install.",
+            pending.manifest.version
+        );
+        state.pending = Some(pending);
+        Ok(status_from_state(
+            &state,
+            true,
+            configuration.channel.id(),
+            None,
+        ))
+    }
 }
 
 fn status_from_state(
@@ -340,6 +481,10 @@ fn status_from_state(
     UpdateStatus {
         configured,
         channel: channel.into(),
+        operation: pending
+            .map(|value| value.action.id())
+            .unwrap_or("update")
+            .into(),
         current_version: env!("CARGO_PKG_VERSION").into(),
         available_version: pending.map(|value| value.manifest.version.clone()),
         notes: pending
@@ -359,6 +504,9 @@ fn status_from_state(
                 .into()
         },
         downloaded: pending.is_some_and(|value| value.package_path.is_some()),
+        skipped_version: update_data_directory()
+            .and_then(|root| crate::update_history::skipped_version(&root, channel))
+            .unwrap_or(None),
     }
 }
 
@@ -401,6 +549,140 @@ pub async fn apply_portable_update(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_portable_update_history() -> Result<UpdateHistorySnapshot, String> {
+    tauri::async_runtime::spawn_blocking(build_update_history_snapshot)
+        .await
+        .map_err(|error| format!("Update history worker failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn prepare_portable_rollback(
+    version: String,
+    state: State<'_, UpdateManager>,
+) -> Result<UpdateStatus, String> {
+    let manager = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.prepare_rollback(&version))
+        .await
+        .map_err(|error| format!("Rollback preparation worker failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn resume_portable_update_version() -> Result<(), String> {
+    let root = update_data_directory()?;
+    let channel = UpdateChannel::from_build()?;
+    crate::update_history::set_skipped_version(&root, channel.id(), None)
+}
+
+#[tauri::command]
+pub fn clear_portable_update_cache(state: State<'_, UpdateManager>) -> Result<u64, String> {
+    let mut manager = state
+        .inner()
+        .0
+        .lock()
+        .map_err(|_| "The update state lock is poisoned".to_string())?;
+    manager.pending = None;
+    manager.phase = "idle";
+    manager.detail = "Downloaded update cache was cleared.".into();
+    let root = update_data_directory()?;
+    clear_recognized_update_cache(&root)?;
+    recognized_cache_bytes(&root)
+}
+
+fn build_update_history_snapshot() -> Result<UpdateHistorySnapshot, String> {
+    let channel = UpdateChannel::from_build()?;
+    let root = update_data_directory()?;
+    let entries =
+        crate::update_history::ensure_current(&root, env!("CARGO_PKG_VERSION"), channel.id())?;
+    let mut skipped_version = crate::update_history::skipped_version(&root, channel.id())?;
+    if skipped_version.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+        crate::update_history::set_skipped_version(&root, channel.id(), None)?;
+        skipped_version = None;
+    }
+    let (available_rollbacks, catalog_detail) = match fetch_rollback_catalog(channel) {
+        Ok(releases) => {
+            let detail = if releases.is_empty() {
+                "No older signed releases are available for this channel.".into()
+            } else {
+                format!("{} signed rollback release(s) available.", releases.len())
+            };
+            (releases, detail)
+        }
+        Err(error) => (Vec::new(), format!("Release catalog unavailable: {error}")),
+    };
+    Ok(UpdateHistorySnapshot {
+        current_version: env!("CARGO_PKG_VERSION").into(),
+        channel: channel.id().into(),
+        skipped_version,
+        entries: entries.into_iter().rev().collect(),
+        available_rollbacks,
+        catalog_detail,
+        cache_bytes: recognized_cache_bytes(&root)?,
+        storage_path: root.display().to_string(),
+    })
+}
+
+fn fetch_rollback_catalog(channel: UpdateChannel) -> Result<Vec<RollbackRelease>, String> {
+    let client = update_client()?;
+    let bytes = fetch_limited(
+        &client,
+        "https://api.github.com/repos/mkkima/Metaplasia/releases?per_page=50",
+        MAX_RELEASE_CATALOG_BYTES,
+    )?;
+    parse_rollback_catalog(&bytes, channel, &current_version()?)
+}
+
+fn parse_rollback_catalog(
+    bytes: &[u8],
+    channel: UpdateChannel,
+    current: &Version,
+) -> Result<Vec<RollbackRelease>, String> {
+    let releases: Vec<GitHubRelease> = serde_json::from_slice(bytes)
+        .map_err(|error| format!("GitHub returned an invalid release catalog: {error}"))?;
+    let mut available = Vec::new();
+    for release in releases {
+        if !channel.accepts_release(&release) {
+            continue;
+        }
+        let prefix = match channel {
+            UpdateChannel::Stable => "v",
+            UpdateChannel::Development => "dev-v",
+        };
+        let Some(version_text) = release.tag_name.strip_prefix(prefix) else {
+            continue;
+        };
+        let Ok(version) = canonical_version(version_text, "release catalog version") else {
+            continue;
+        };
+        if version >= *current {
+            continue;
+        }
+        let names: BTreeSet<&str> = release
+            .assets
+            .iter()
+            .map(|asset| asset.name.as_str())
+            .collect();
+        let archive = channel.archive_name(version_text);
+        if !names.contains("portable-update.json")
+            || !names.contains("portable-update.json.sig")
+            || !names.contains(archive.as_str())
+        {
+            continue;
+        }
+        available.push((
+            version,
+            RollbackRelease {
+                version: version_text.into(),
+                published_at: release.published_at.unwrap_or_default(),
+                release_url: release.html_url,
+            },
+        ));
+    }
+    available.sort_by(|(left, _), (right, _)| right.cmp(left));
+    available.truncate(20);
+    Ok(available.into_iter().map(|(_, release)| release).collect())
+}
+
 fn verification_key() -> Result<VerifyingKey, String> {
     let encoded = UPDATE_PUBLIC_KEY_B64.ok_or(
         "This build has no embedded update verification key. Install a signed release build.",
@@ -438,6 +720,7 @@ fn allowed_download_host(url: &reqwest::Url) -> bool {
     matches!(
         url.host_str(),
         Some("github.com")
+            | Some("api.github.com")
             | Some("objects.githubusercontent.com")
             | Some("release-assets.githubusercontent.com")
     )
@@ -472,6 +755,7 @@ fn fetch_pending_update(
         return Ok(None);
     }
     Ok(Some(PendingUpdate {
+        action: UpdateAction::Update,
         manifest,
         manifest_bytes,
         signature,
@@ -479,6 +763,57 @@ fn fetch_pending_update(
         manifest_path: None,
         signature_path: None,
     }))
+}
+
+fn fetch_versioned_update(
+    configuration: &UpdateConfiguration,
+    requested_version: &str,
+) -> Result<PendingUpdate, String> {
+    canonical_version(requested_version, "rollback version")?;
+    let tag = configuration.channel.version_tag(requested_version);
+    let base = format!("https://github.com/mkkima/Metaplasia/releases/download/{tag}");
+    let client = update_client()?;
+    let manifest_bytes = fetch_limited(
+        &client,
+        &format!("{base}/portable-update.json"),
+        MAX_MANIFEST_BYTES,
+    )?;
+    let signature = fetch_limited(
+        &client,
+        &format!("{base}/portable-update.json.sig"),
+        MAX_SIGNATURE_BYTES,
+    )?;
+    let manifest = verify_manifest_bytes(
+        &manifest_bytes,
+        &signature,
+        &configuration.key,
+        configuration.channel,
+    )?;
+    if manifest.version != requested_version {
+        return Err("The signed rollback manifest does not match the requested version".into());
+    }
+    Ok(PendingUpdate {
+        action: UpdateAction::Rollback,
+        manifest,
+        manifest_bytes,
+        signature,
+        package_path: None,
+        manifest_path: None,
+        signature_path: None,
+    })
+}
+
+fn current_version() -> Result<Version, String> {
+    canonical_version(env!("CARGO_PKG_VERSION"), "current application version")
+}
+
+fn canonical_version(value: &str, label: &str) -> Result<Version, String> {
+    let version =
+        Version::parse(value).map_err(|error| format!("The {label} is invalid: {error}"))?;
+    if !version.pre.is_empty() || !version.build.is_empty() || version.to_string() != value {
+        return Err(format!("The {label} must be canonical stable SemVer"));
+    }
+    Ok(version)
 }
 
 fn fetch_limited(client: &Client, url: &str, maximum: usize) -> Result<Vec<u8>, String> {
@@ -726,6 +1061,121 @@ fn update_data_directory() -> Result<PathBuf, String> {
         .map_err(|error| format!("Could not resolve the portable update directory: {error}"))
 }
 
+fn recognized_cache_bytes(root: &Path) -> Result<u64, String> {
+    let mut total = 0_u64;
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("Could not inspect the portable update cache: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Could not inspect a portable update cache entry: {error}"))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Could not inspect {}: {error}", entry.path().display()))?;
+        if metadata.is_file() && is_update_helper_name(&name) {
+            total = total.saturating_add(metadata.len());
+        } else if metadata.is_dir() && is_pending_directory_name(&name) {
+            for child in fs::read_dir(entry.path()).map_err(|error| {
+                format!("Could not inspect pending portable update files: {error}")
+            })? {
+                let child = child.map_err(|error| {
+                    format!("Could not inspect a pending portable update file: {error}")
+                })?;
+                let child_name = child.file_name();
+                let child_name = child_name.to_string_lossy();
+                let child_metadata = child.metadata().map_err(|error| {
+                    format!("Could not inspect {}: {error}", child.path().display())
+                })?;
+                if child_metadata.is_file() && is_recognized_pending_file(&child_name) {
+                    total = total.saturating_add(child_metadata.len());
+                }
+            }
+        }
+    }
+    Ok(total)
+}
+
+fn clear_recognized_update_cache(root: &Path) -> Result<(), String> {
+    let resolved_root = root
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve the portable update cache: {error}"))?;
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("Could not inspect the portable update cache: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Could not inspect a portable update cache entry: {error}"))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Could not inspect {}: {error}", entry.path().display()))?;
+        if metadata.is_file() && is_update_helper_name(&name) {
+            remove_file_if_present(&entry.path())?;
+            continue;
+        }
+        if !metadata.is_dir() || !is_pending_directory_name(&name) {
+            continue;
+        }
+        let directory = entry
+            .path()
+            .canonicalize()
+            .map_err(|error| format!("Could not resolve a pending update directory: {error}"))?;
+        if directory.parent() != Some(resolved_root.as_path()) {
+            return Err("A pending update directory escaped the update cache".into());
+        }
+        for child in fs::read_dir(&directory)
+            .map_err(|error| format!("Could not inspect pending update files: {error}"))?
+        {
+            let child = child
+                .map_err(|error| format!("Could not inspect a pending update file: {error}"))?;
+            let child_name = child.file_name();
+            let child_name = child_name.to_string_lossy();
+            if child
+                .metadata()
+                .is_ok_and(|child_metadata| child_metadata.is_file())
+                && is_recognized_pending_file(&child_name)
+            {
+                remove_file_if_present(&child.path())?;
+            }
+        }
+        match fs::remove_dir(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(error) => {
+                return Err(format!(
+                    "Could not remove the empty pending update directory: {error}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_pending_directory_name(name: &str) -> bool {
+    name.strip_prefix("pending-")
+        .is_some_and(|version| canonical_version(version, "pending update version").is_ok())
+}
+
+fn is_update_helper_name(name: &str) -> bool {
+    name.strip_prefix("metaplasia-update-helper-")
+        .and_then(|value| value.strip_suffix(".exe"))
+        .is_some_and(|process_id| {
+            !process_id.is_empty() && process_id.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+fn is_recognized_pending_file(name: &str) -> bool {
+    matches!(
+        name,
+        "portable-update.json"
+            | "portable-update.json.sig"
+            | "package.download"
+            | "portable-update.json.tmp"
+            | "portable-update.json.sig.tmp"
+    ) || (name.starts_with("Metaplasia-") && name.ends_with("-portable.zip"))
+}
+
 fn launch_update_helper(pending: &PendingUpdate) -> Result<(), String> {
     let package = pending
         .package_path
@@ -768,6 +1218,7 @@ fn launch_update_helper(pending: &PendingUpdate) -> Result<(), String> {
     command
         .arg("--apply-portable-update")
         .arg(std::process::id().to_string())
+        .arg(pending.action.id())
         .arg(&target_directory)
         .arg(manifest)
         .arg(signature)
@@ -829,6 +1280,7 @@ pub fn run_helper_from_args() -> Option<i32> {
 #[derive(Debug)]
 struct HelperArguments {
     parent_process_id: u32,
+    action: UpdateAction,
     target_directory: PathBuf,
     manifest_path: PathBuf,
     signature_path: PathBuf,
@@ -836,7 +1288,7 @@ struct HelperArguments {
 }
 
 fn parse_helper_arguments(arguments: &[OsString]) -> Result<HelperArguments, String> {
-    if arguments.len() != 7 {
+    if arguments.len() != 8 {
         return Err("The portable update helper received an invalid argument count".into());
     }
     let parent_process_id = arguments[2]
@@ -849,10 +1301,11 @@ fn parse_helper_arguments(arguments: &[OsString]) -> Result<HelperArguments, Str
     }
     Ok(HelperArguments {
         parent_process_id,
-        target_directory: PathBuf::from(&arguments[3]),
-        manifest_path: PathBuf::from(&arguments[4]),
-        signature_path: PathBuf::from(&arguments[5]),
-        package_path: PathBuf::from(&arguments[6]),
+        action: UpdateAction::parse(&arguments[3])?,
+        target_directory: PathBuf::from(&arguments[4]),
+        manifest_path: PathBuf::from(&arguments[5]),
+        signature_path: PathBuf::from(&arguments[6]),
+        package_path: PathBuf::from(&arguments[7]),
     })
 }
 
@@ -895,8 +1348,14 @@ fn apply_portable_update_helper(arguments: HelperArguments) -> Result<(), String
         .map_err(|error| format!("The helper version is invalid: {error}"))?;
     let update = Version::parse(&manifest.version)
         .map_err(|error| format!("The update version is invalid: {error}"))?;
-    if update <= current {
-        return Err("The portable update is not newer than the running application".into());
+    match arguments.action {
+        UpdateAction::Update if update <= current => {
+            return Err("The portable update is not newer than the running application".into());
+        }
+        UpdateAction::Rollback if update >= current => {
+            return Err("The portable rollback is not older than the running application".into());
+        }
+        _ => {}
     }
     verify_package_file(&package_path, &manifest.package)?;
     wait_for_process_exit(arguments.parent_process_id, HELPER_WAIT_TIMEOUT)?;
@@ -923,6 +1382,7 @@ fn apply_portable_update_helper(arguments: HelperArguments) -> Result<(), String
     }
 
     let replacement = replace_portable_files(&target, &stage, &backup);
+    let replacement_succeeded = replacement.is_ok();
     let restart = crate::start_menu_policy::restart_explorer_after_portable_update();
     let operation = match replacement {
         Err(error) => {
@@ -940,12 +1400,42 @@ fn apply_portable_update_helper(arguments: HelperArguments) -> Result<(), String
         success: operation.is_ok(),
         detail: match &operation {
             Ok(()) => format!(
-                "Portable update {} installed successfully.",
+                "Portable {} {} installed successfully.",
+                arguments.action.id(),
                 manifest.version
             ),
             Err(error) => error.clone(),
         },
     };
+    let history_outcome = if replacement_succeeded {
+        "success"
+    } else {
+        "failed"
+    };
+    if let Err(error) = crate::update_history::record(
+        &update_root,
+        &current.to_string(),
+        &manifest.version,
+        configuration.channel.id(),
+        arguments.action.id(),
+        history_outcome,
+        &update_result.detail,
+    ) {
+        output_debug_error(&format!("[Metaplasia Update Helper] {error}\n"));
+    }
+    if replacement_succeeded {
+        let skipped = match arguments.action {
+            UpdateAction::Update => None,
+            UpdateAction::Rollback => Some(current.to_string()),
+        };
+        if let Err(error) = crate::update_history::set_skipped_version(
+            &update_root,
+            configuration.channel.id(),
+            skipped.as_deref(),
+        ) {
+            output_debug_error(&format!("[Metaplasia Update Helper] {error}\n"));
+        }
+    }
     if let Err(error) = write_last_update_result(&update_result) {
         output_debug_error(&format!("[Metaplasia Update Helper] {error}\n"));
     }
@@ -1369,6 +1859,64 @@ mod tests {
             OsString::from("--apply-portable-update"),
         ];
         assert!(parse_helper_arguments(&arguments).is_err());
+    }
+
+    #[test]
+    fn helper_parses_explicit_rollback_action() {
+        let parent_process_id = std::process::id().saturating_add(1);
+        let arguments = vec![
+            OsString::from("helper.exe"),
+            OsString::from("--apply-portable-update"),
+            OsString::from(parent_process_id.to_string()),
+            OsString::from("rollback"),
+            OsString::from("C:\\Metaplasia"),
+            OsString::from("manifest.json"),
+            OsString::from("manifest.sig"),
+            OsString::from("package.zip"),
+        ];
+        let parsed = parse_helper_arguments(&arguments).unwrap();
+        assert_eq!(parsed.action, UpdateAction::Rollback);
+        assert_eq!(parsed.parent_process_id, parent_process_id);
+    }
+
+    #[test]
+    fn rollback_catalog_requires_complete_signed_channel_assets() {
+        let catalog = br#"[
+          {"tag_name":"dev-v0.1.1","draft":false,"prerelease":true,"published_at":"2026-08-15T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.1","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.1-windows-x64-portable-dev.zip"}]},
+          {"tag_name":"dev-v0.1.0","draft":false,"prerelease":true,"published_at":"2026-08-14T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/dev-v0.1.0","assets":[{"name":"Metaplasia-0.1.0-windows-x64-portable-dev.zip"}]},
+          {"tag_name":"v0.1.0","draft":false,"prerelease":false,"published_at":"2026-08-13T12:00:00Z","html_url":"https://github.com/mkkima/Metaplasia/releases/tag/v0.1.0","assets":[{"name":"portable-update.json"},{"name":"portable-update.json.sig"},{"name":"Metaplasia-0.1.0-windows-x64-portable.zip"}]}
+        ]"#;
+        let releases = parse_rollback_catalog(
+            catalog,
+            UpdateChannel::Development,
+            &Version::parse("0.1.2").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].version, "0.1.1");
+    }
+
+    #[test]
+    fn cache_cleanup_removes_only_recognized_files() {
+        let root =
+            std::env::temp_dir().join(format!("metaplasia-cache-test-{}", unique_nonce().unwrap()));
+        let pending = root.join("pending-0.2.0");
+        fs::create_dir_all(&pending).unwrap();
+        fs::write(pending.join("portable-update.json"), b"manifest").unwrap();
+        fs::write(pending.join("Metaplasia-0.2.0-portable.zip"), b"package").unwrap();
+        fs::write(pending.join("keep-user-file.txt"), b"keep").unwrap();
+        fs::write(root.join("metaplasia-update-helper-123.exe"), b"helper").unwrap();
+
+        assert!(recognized_cache_bytes(&root).unwrap() > 0);
+        clear_recognized_update_cache(&root).unwrap();
+        assert!(!pending.join("portable-update.json").exists());
+        assert!(!pending.join("Metaplasia-0.2.0-portable.zip").exists());
+        assert!(pending.join("keep-user-file.txt").is_file());
+        assert!(!root.join("metaplasia-update-helper-123.exe").exists());
+
+        fs::remove_file(pending.join("keep-user-file.txt")).unwrap();
+        fs::remove_dir(pending).unwrap();
+        fs::remove_dir(root).unwrap();
     }
 
     fn create_test_archive(path: &Path, names: &[&str]) {

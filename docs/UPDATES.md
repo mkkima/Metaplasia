@@ -24,6 +24,34 @@ Windows shell components. Turning the switch off disables that automatic path.
 The manual **Check now**, **Download update**, and **Install and restart** flow
 remains available and requires confirmation before installation.
 
+The dedicated **Updates** page also shows the running version and channel,
+verification state, downloaded-cache size, the local metadata directory, and a
+bounded installation history. History is stored in
+`%LOCALAPPDATA%\Metaplasia\updates\update-history.json`; it contains at most 50
+events and never contains the portable binaries themselves. **Clear downloads**
+removes only recognized updater cache files and deliberately leaves history,
+policy metadata, settings, and unknown files untouched.
+
+## Signed rollback
+
+The rollback list is built from older releases on the running build's channel.
+A release is offered only when its versioned GitHub Release contains the
+channel's complete portable ZIP, `portable-update.json`, and
+`portable-update.json.sig`. Selecting a version does not trust the catalog by
+itself: Metaplasia downloads that exact version's manifest, verifies it with
+the channel's embedded Ed25519 public key, validates its canonical version and
+GitHub URL, then verifies the ZIP size and SHA-256 before using the same staged,
+transactional replacement helper as a forward update.
+
+A rollback preserves `%LOCALAPPDATA%\Metaplasia` settings and history, but an
+older binary may not understand settings introduced by a newer version. The UI
+therefore requires explicit confirmation and disables automatic updates before
+replacement. The departed version is also recorded as skipped for that channel
+so it is not immediately installed again; **Allow again** clears this policy.
+Stable and development skip policies are isolated. No permanent copy of an old
+binary package is retained: rollback downloads the selected signed release
+when requested.
+
 Before any replacement, the application verifies an Ed25519 signature over the
 raw manifest, validates the GitHub release URL, downloads with strict size
 limits, and verifies the ZIP SHA-256. The helper verifies all of this again,
@@ -121,6 +149,11 @@ within the development channel.
 Versions distributed before this update client exists require one final manual
 replacement with an updater-enabled signed release. Subsequent versions update
 through the portable channel.
+
+Rollback has the same compatibility boundary. Releases without a signed
+versioned manifest are intentionally omitted, so `dev-v0.1.0` cannot be used as
+an in-app rollback target. The first development rollback target is
+`dev-v0.1.1`.
 
 Do not rotate the Ed25519 key or remove manifest schema `1` without first
 shipping a bridge release that trusts both channels. Older portable copies

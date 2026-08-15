@@ -23,6 +23,7 @@
       <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 6v12M16 6v12"/></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
       <symbol id="i-diagnostics" viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
+      <symbol id="i-updates" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18 10a7 7 0 0 0-12-3L4 12m2 2a7 7 0 0 0 12 3l2-5"/></symbol>
       <symbol id="i-about" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
       <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
@@ -80,6 +81,9 @@
           </button>
         </div>
         <div class="nav-section nav-bottom">
+          <button class="nav-item" type="button" data-route="updates">
+            <svg><use href="#i-updates"></use></svg><span>Updates</span>
+          </button>
           <button class="nav-item" type="button" data-route="diagnostics">
             <svg><use href="#i-diagnostics"></use></svg><span>Diagnostics</span>
           </button>
@@ -300,6 +304,55 @@
           </div>
         </section>
 
+        <section class="page" data-page="updates" aria-labelledby="updates-page-title">
+          <div class="page-heading page-heading-actions">
+            <div><span class="eyebrow">Portable lifecycle</span><h1 id="updates-page-title">Updates</h1><p>Signed releases, installation history, rollback, and local update storage.</p></div>
+            <button class="secondary-button" id="refresh-update-history" type="button"><svg><use href="#i-refresh"></use></svg>Refresh</button>
+          </div>
+
+          <div class="update-summary-grid">
+            <article class="update-summary-card">
+              <span>Current version</span><strong id="update-current-version">Metaplasia</strong><p id="update-current-channel">Loading portable channel…</p>
+            </article>
+            <article class="update-summary-card">
+              <span>Verification</span><strong>Signed manifest</strong><p>Version, URL, size, and SHA-256 are verified before replacement.</p>
+            </article>
+            <article class="update-summary-card">
+              <span>Local cache</span><strong id="update-cache-size">Calculating…</strong><p id="update-storage-path">%LOCALAPPDATA%\Metaplasia\updates</p>
+            </article>
+          </div>
+
+          <section class="update-card" aria-labelledby="updates-title">
+            <div class="update-heading">
+              <div><span class="eyebrow" id="update-channel-label">Portable channel</span><h2 id="updates-title">Update control</h2><p>Only explicitly tagged and cryptographically verified releases are accepted.</p></div>
+              <label class="update-auto"><span><strong>Automatic updates</strong><small>Verify, install, and restart automatically.</small></span><span class="switch"><input id="automatic-updates" type="checkbox" aria-label="Automatically check, download, and install portable updates"><span></span></span></label>
+            </div>
+            <div class="update-status" aria-live="polite">
+              <span class="status-bar" id="update-status-bar"></span>
+              <div><strong id="update-status-title">Loading update status…</strong><p id="update-status-detail">The updater only contacts the selected Metaplasia GitHub Releases channel.</p></div>
+            </div>
+            <p class="update-notes" id="update-notes" hidden></p>
+            <div class="update-skip" id="update-skip" hidden><div><strong id="update-skip-title">A version is skipped</strong><p>Automatic checks will wait for a newer release.</p></div><button class="secondary-button" id="resume-skipped-update" type="button">Allow again</button></div>
+            <div class="update-actions">
+              <button class="secondary-button" id="clear-update-cache" type="button">Clear downloads</button>
+              <button class="secondary-button" id="check-updates" type="button">Check now</button>
+              <button class="secondary-button" id="download-update" type="button" hidden>Download update</button>
+              <button class="primary-button" id="install-update" type="button" hidden>Install and restart</button>
+            </div>
+          </section>
+
+          <div class="update-history-grid">
+            <section class="settings-section update-history-section" aria-labelledby="update-history-title">
+              <div class="settings-title"><div><h2 id="update-history-title">Installation history</h2><p>Successful installs, rollbacks, and failed replacement attempts on this PC.</p></div></div>
+              <div class="update-history-list" id="update-history-list" aria-live="polite"><p class="update-empty">Loading history…</p></div>
+            </section>
+            <section class="settings-section update-history-section" aria-labelledby="rollback-title">
+              <div class="settings-title"><div><h2 id="rollback-title">Rollback</h2><p id="rollback-summary">Loading older signed releases…</p></div></div>
+              <div class="rollback-list" id="rollback-list" aria-live="polite"><p class="update-empty">Loading releases…</p></div>
+            </section>
+          </div>
+        </section>
+
         <section class="page" data-page="diagnostics" aria-labelledby="diagnostics-title">
           <div class="page-heading page-heading-actions"><div><span class="eyebrow">Runtime</span><h1 id="diagnostics-title">Diagnostics</h1><p>Actionable native state, XAML observations, and bounded local host logs.</p></div><button class="secondary-button" id="refresh-diagnostics" type="button"><svg><use href="#i-refresh"></use></svg>Refresh diagnostics</button></div>
           <div class="diagnostic-grid" id="diagnostic-targets"></div>
@@ -329,22 +382,6 @@
         <section class="page" data-page="about" aria-labelledby="about-title">
           <div class="page-heading"><div><span class="eyebrow">About</span><h1 id="about-title">Metaplasia</h1><p>A native Windows 11 shell customization engine with a Tauri control center.</p></div></div>
           <div class="about-grid"><article class="about-card"><span>Application</span><strong id="application-version">Metaplasia</strong><p>Taskbar, Start menu, and File Explorer customization from one local control surface.</p></article><article class="about-card"><span>Interface</span><strong>Tauri v2 + WebView2</strong><p>Bundled static assets, native window management, and hardware-accelerated rendering.</p></article><article class="about-card"><span>Transport</span><strong>Per-user named pipe</strong><p>Versioned binary IPC restricted to your current Windows user and session.</p></article></div>
-          <section class="update-card" aria-labelledby="updates-title">
-            <div class="update-heading">
-              <div><span class="eyebrow" id="update-channel-label">Portable channel</span><h2 id="updates-title">Updates</h2><p>Signed full-package updates from GitHub Releases. No installer or background service.</p></div>
-              <label class="update-auto"><span><strong>Automatic updates</strong><small>Verify, install, and restart automatically.</small></span><span class="switch"><input id="automatic-updates" type="checkbox" aria-label="Automatically check, download, and install portable updates"><span></span></span></label>
-            </div>
-            <div class="update-status" aria-live="polite">
-              <span class="status-bar" id="update-status-bar"></span>
-              <div><strong id="update-status-title">Loading update status…</strong><p id="update-status-detail">The updater only contacts the Metaplasia GitHub Releases channel.</p></div>
-            </div>
-            <p class="update-notes" id="update-notes" hidden></p>
-            <div class="update-actions">
-              <button class="secondary-button" id="check-updates" type="button">Check now</button>
-              <button class="secondary-button" id="download-update" type="button" hidden>Download update</button>
-              <button class="primary-button" id="install-update" type="button" hidden>Install and restart</button>
-            </div>
-          </section>
         </section>
       </main>
     </div>
@@ -357,6 +394,16 @@
         <p>The complete portable binary set will be replaced. Your settings stay in <strong>%LOCALAPPDATA%\Metaplasia</strong>.</p>
         <p>Metaplasia will close and Explorer and Start will briefly restart so the injected DLL can be replaced safely.</p>
         <div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="primary-button" id="confirm-update-install" value="install">Install and restart</button></div>
+      </form>
+    </dialog>
+    <dialog class="confirm-dialog" id="rollback-confirm-dialog" aria-labelledby="rollback-confirm-title">
+      <form method="dialog">
+        <span class="eyebrow">Signed rollback</span>
+        <h2 id="rollback-confirm-title">Rollback Metaplasia?</h2>
+        <p id="rollback-confirm-detail">The selected signed portable version will replace the current binary set.</p>
+        <p>Automatic updates will be disabled to prevent the current release from immediately reinstalling. Settings and update history remain in <strong>%LOCALAPPDATA%\Metaplasia</strong>.</p>
+        <p>Explorer and Start will briefly restart. Older code may not support settings introduced by newer versions, but the settings file is preserved.</p>
+        <div class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="danger-button" value="rollback">Rollback and restart</button></div>
       </form>
     </dialog>
   </body>

@@ -2,6 +2,7 @@ mod diagnostics;
 mod portable_update;
 mod protocol;
 mod start_menu_policy;
+mod update_history;
 
 use protocol::{MessageKind, PipeClient, Reader, expect_kind, write_string, write_u32};
 use serde::{Deserialize, Serialize};
@@ -834,9 +835,13 @@ pub fn run() {
             get_xaml_diagnostics,
             diagnostics::get_diagnostic_logs,
             portable_update::get_portable_update_status,
+            portable_update::get_portable_update_history,
             portable_update::check_portable_update,
             portable_update::download_portable_update,
-            portable_update::apply_portable_update
+            portable_update::apply_portable_update,
+            portable_update::prepare_portable_rollback,
+            portable_update::resume_portable_update_version,
+            portable_update::clear_portable_update_cache
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
