@@ -244,13 +244,19 @@ try {
         Invoke-Checked -Description 'Rust lints' -Command {
             & cargo clippy --manifest-path src-tauri\Cargo.toml --locked --all-targets -- -D warnings
         }
-        $javaScriptFiles = & rg --files frontend -g '*.js'
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not enumerate frontend JavaScript files.'
+        $javaScriptFiles = @(
+            Get-ChildItem `
+                -LiteralPath (Join-Path $root 'frontend') `
+                -Filter '*.js' `
+                -File `
+                -Recurse
+        )
+        if ($javaScriptFiles.Count -eq 0) {
+            throw 'No frontend JavaScript files were found.'
         }
         foreach ($javaScriptFile in $javaScriptFiles) {
-            Invoke-Checked -Description "JavaScript syntax check for $javaScriptFile" -Command {
-                & node --check $javaScriptFile
+            Invoke-Checked -Description "JavaScript syntax check for $($javaScriptFile.FullName)" -Command {
+                & node --check $javaScriptFile.FullName
             }
         }
     } finally {
