@@ -33,6 +33,12 @@ pushes to `main`, feature branches, and non-version tags do not publish an
 update. The workflow also refuses a tag unless the tag version exactly matches
 `CMakeLists.txt`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 
+An explicitly pushed `dev-vMAJOR.MINOR.PATCH` tag publishes a separate unsigned
+Debug portable ZIP as a GitHub pre-release. This bootstrap channel exists for
+development and personal testing before production signing is configured. It
+does not publish an update manifest, is never considered by automatic update
+checks, and does not weaken the fail-closed `v*` release workflow.
+
 ## One-time GitHub repository setup
 
 Generate a dedicated Ed25519 key. Never reuse the Authenticode certificate key
@@ -78,6 +84,18 @@ The tag workflow builds and tests Release, Authenticode-signs every component,
 creates the ZIP, creates and signs `portable-update.json`, and publishes the
 assets to a GitHub Release. Existing updater-enabled portable copies will then
 see the release through the automatic or manual check.
+
+Before the four signing secrets are configured, a development portable build
+can be published independently:
+
+```powershell
+git tag dev-v0.2.0
+git push origin dev-v0.2.0
+```
+
+This creates a clearly labelled GitHub pre-release containing the five-file
+Debug runtime and `SHA256SUMS.txt`; it is not a substitute for the signed
+automatic-update channel.
 
 Versions distributed before this update client exists require one final manual
 replacement with an updater-enabled signed release. Subsequent versions update
