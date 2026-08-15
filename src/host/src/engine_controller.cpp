@@ -164,6 +164,94 @@ std::string_view CustomizationTarget(
     }
 }
 
+std::string_view CustomizationName(
+    const protocol::CustomizationId customization) noexcept {
+    switch (customization) {
+        case protocol::CustomizationId::taskbar_clock_prefix:
+            return "taskbar-clock-prefix";
+        case protocol::CustomizationId::taskbar_opacity_milli:
+            return "taskbar-opacity";
+        case protocol::CustomizationId::taskbar_hide_notification_center:
+            return "taskbar-hide-notification-center";
+        case protocol::CustomizationId::taskbar_hide_control_center:
+            return "taskbar-hide-control-center";
+        case protocol::CustomizationId::taskbar_hide_show_desktop:
+            return "taskbar-hide-show-desktop";
+        case protocol::CustomizationId::taskbar_background_color_enabled:
+            return "taskbar-background-color-enabled";
+        case protocol::CustomizationId::taskbar_background_color:
+            return "taskbar-background-color";
+        case protocol::CustomizationId::taskbar_capsule_enabled:
+            return "taskbar-capsule-enabled";
+        case protocol::CustomizationId::file_explorer_title_prefix:
+            return "file-explorer-title-prefix";
+        case protocol::CustomizationId::file_explorer_background_color_enabled:
+            return "file-explorer-background-color-enabled";
+        case protocol::CustomizationId::file_explorer_background_color:
+            return "file-explorer-background-color";
+        case protocol::CustomizationId::file_explorer_transition_animation:
+            return "file-explorer-transition-animation";
+        case protocol::CustomizationId::file_explorer_custom_scrollbar_enabled:
+            return "file-explorer-custom-scrollbar-enabled";
+        case protocol::CustomizationId::start_menu_opacity_milli:
+            return "start-menu-opacity";
+        case protocol::CustomizationId::start_menu_hide_recommended:
+            return "start-menu-hide-recommended";
+        case protocol::CustomizationId::start_menu_background_color_enabled:
+            return "start-menu-background-color-enabled";
+        case protocol::CustomizationId::start_menu_background_color:
+            return "start-menu-background-color";
+        case protocol::CustomizationId::start_menu_three_panel_layout_enabled:
+            return "start-menu-three-panel-layout-enabled";
+        case protocol::CustomizationId::start_menu_hide_all_apps:
+            return "start-menu-hide-all-apps";
+        default:
+            return "unknown";
+    }
+}
+
+std::string_view CompatibilityTargetName(
+    const compatibility::AdapterId adapter) noexcept {
+    switch (adapter) {
+        case compatibility::AdapterId::taskbar_clock:
+            return "taskbar";
+        case compatibility::AdapterId::file_explorer_title:
+            return "file-explorer";
+        case compatibility::AdapterId::start_menu_xaml:
+            return "start-menu";
+        default:
+            return "unknown";
+    }
+}
+
+bool ShouldRetryCompatibilitySoon(
+    const compatibility::CompatibilityDecision& decision) {
+    return decision.detail.starts_with("Required module is not loaded") ||
+           decision.detail.starts_with("Unable to inspect mapped module") ||
+           decision.detail.starts_with("No diagnostic modules");
+}
+
+std::string CompatibilityDiagnosticMessage(
+    const compatibility::CompatibilityDecision& decision) {
+    std::ostringstream message;
+    message << "result=" << (decision.supported ? "approved" : "rejected")
+            << ", adapter=" << compatibility::AdapterName(decision.adapter)
+            << ", windows=" << decision.windows.ToString()
+            << ", profile="
+            << (decision.profile_id.empty() ? "none" : decision.profile_id)
+            << ", detail=" << decision.detail;
+    for (const auto& module : decision.modules) {
+        const auto name = WideToUtf8(module.module_name);
+        const auto path = WideToUtf8(module.path.native());
+        message << "; module="
+                << (name.ok() ? name.value() : "<invalid-utf16-name>")
+                << ", path="
+                << (path.ok() ? path.value() : "<invalid-utf16-path>")
+                << ", key=" << module.compatibility_key;
+    }
+    return message.str();
+}
+
 std::string_view ProcessTargetName(
     const protocol::AgentTarget target,
     const std::uint32_t features) noexcept {
@@ -475,6 +563,7 @@ Result<void> EngineController::SetEnabled(
         return Status(ErrorCode::invalid_argument, "Unknown target");
     }
 
+    std::uint64_t configuration_generation = 0;
     {
         // Saving while holding the controller lock serializes user changes
         // with crash-loop fail-safe persistence.
@@ -492,8 +581,10 @@ Result<void> EngineController::SetEnabled(
         settings_ = updated;
         if (target == protocol::TargetId::start_menu) {
             ++start_menu_configuration_generation_;
+            configuration_generation = start_menu_configuration_generation_;
         } else {
             ++explorer_configuration_generation_;
+            configuration_generation = explorer_configuration_generation_;
         }
         if (enabled) {
             if (target == protocol::TargetId::start_menu) {
@@ -507,19 +598,23 @@ Result<void> EngineController::SetEnabled(
         wake_requested_ = true;
     }
     wake_condition_.notify_one();
+    std::ostringstream diagnostic;
+    diagnostic << "enabled=" << (enabled ? "true" : "false")
+               << ", configurationGeneration=" << configuration_generation
+               << ", reconciliationQueued=true";
     diagnostic_log_.Write(
         DiagnosticLevel::info,
         "engine",
         enabled ? "target-enabled" : "target-disabled",
         TargetName(target),
         0,
-        enabled ? "Target customization was enabled"
-                : "Target customization was disabled");
+        diagnostic.str());
     return {};
 }
 
 Result<void> EngineController::SetCustomization(
     const protocol::SetCustomizationRequest& request) {
+    std::uint64_t configuration_generation = 0;
     {
         std::lock_guard lock(mutex_);
         HostSettings updated = settings_;
@@ -550,19 +645,25 @@ Result<void> EngineController::SetCustomization(
             request.customization ==
                 protocol::CustomizationId::start_menu_hide_all_apps) {
             ++start_menu_configuration_generation_;
+            configuration_generation = start_menu_configuration_generation_;
         } else {
             ++explorer_configuration_generation_;
+            configuration_generation = explorer_configuration_generation_;
         }
         wake_requested_ = true;
     }
     wake_condition_.notify_one();
+    std::ostringstream diagnostic;
+    diagnostic << "customization=" << CustomizationName(request.customization)
+               << ", configurationGeneration=" << configuration_generation
+               << ", reconciliationQueued=true, value=omitted";
     diagnostic_log_.Write(
         DiagnosticLevel::info,
         "engine",
         "customization-updated",
         CustomizationTarget(request.customization),
         0,
-        "A customization setting was persisted; values are intentionally omitted from logs");
+        diagnostic.str());
     return {};
 }
 
@@ -1404,9 +1505,9 @@ EngineController::CompatibilityState EngineController::EvaluateCompatibility(
                 break;
         }
         const auto refresh_interval =
-            cached != nullptr && cached->supported
-            ? kCompatibilityRefreshInterval
-            : kPendingCompatibilityRefreshInterval;
+            cached != nullptr && cached->retry_soon
+            ? kPendingCompatibilityRefreshInterval
+            : kCompatibilityRefreshInterval;
         if (cached != nullptr && cached->evaluated &&
             cached->process_id == process_id &&
             now - cached->checked_at < refresh_interval) {
@@ -1418,24 +1519,54 @@ EngineController::CompatibilityState EngineController::EvaluateCompatibility(
     evaluated.process_id = process_id;
     evaluated.evaluated = true;
     evaluated.checked_at = now;
+    DiagnosticLevel diagnostic_level = DiagnosticLevel::warning;
+    std::string_view diagnostic_event = "inspection-failed";
+    std::string diagnostic_message;
     try {
         auto decision = compatibility::EvaluateProcess(adapter, process_id);
         if (!decision.ok()) {
+            evaluated.retry_soon = true;
             evaluated.detail =
                 "Compatibility inspection failed: " +
                 decision.status().message();
+            diagnostic_message =
+                "result=inspection-error, adapter=" +
+                std::string(compatibility::AdapterName(adapter)) +
+                ", detail=" + evaluated.detail;
         } else {
             evaluated.supported = decision.value().supported;
+            evaluated.retry_soon =
+                ShouldRetryCompatibilitySoon(decision.value());
+            evaluated.profile_id = decision.value().profile_id;
             evaluated.detail = decision.value().detail;
+            diagnostic_level = evaluated.supported
+                ? DiagnosticLevel::info
+                : DiagnosticLevel::warning;
+            diagnostic_event = evaluated.supported
+                ? "profile-approved"
+                : "profile-rejected";
+            diagnostic_message =
+                CompatibilityDiagnosticMessage(decision.value());
         }
     } catch (const std::exception& exception) {
+        evaluated.retry_soon = true;
         evaluated.detail =
             std::string("Compatibility inspection exception: ") +
             exception.what();
+        diagnostic_message =
+            "result=inspection-exception, adapter=" +
+            std::string(compatibility::AdapterName(adapter)) +
+            ", detail=" + evaluated.detail;
     } catch (...) {
+        evaluated.retry_soon = true;
         evaluated.detail = "Unknown compatibility inspection exception";
+        diagnostic_message =
+            "result=inspection-exception, adapter=" +
+            std::string(compatibility::AdapterName(adapter)) +
+            ", detail=" + evaluated.detail;
     }
 
+    bool write_diagnostic = false;
     {
         std::lock_guard lock(mutex_);
         CompatibilityState* destination = nullptr;
@@ -1444,15 +1575,30 @@ EngineController::CompatibilityState EngineController::EvaluateCompatibility(
                 destination = &taskbar_compatibility_;
                 break;
             case compatibility::AdapterId::file_explorer_title:
-                explorer_compatibility_[process_id] = evaluated;
+                destination = &explorer_compatibility_[process_id];
                 break;
             case compatibility::AdapterId::start_menu_xaml:
                 destination = &start_menu_compatibility_;
                 break;
         }
         if (destination != nullptr) {
+            write_diagnostic =
+                !destination->evaluated ||
+                destination->process_id != process_id ||
+                destination->supported != evaluated.supported ||
+                destination->profile_id != evaluated.profile_id ||
+                destination->detail != evaluated.detail;
             *destination = evaluated;
         }
+    }
+    if (write_diagnostic) {
+        diagnostic_log_.Write(
+            diagnostic_level,
+            "compatibility",
+            diagnostic_event,
+            CompatibilityTargetName(adapter),
+            process_id,
+            diagnostic_message);
     }
     return evaluated;
 }

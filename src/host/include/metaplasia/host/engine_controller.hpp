@@ -70,7 +70,9 @@ private:
         std::uint32_t process_id{0};
         bool evaluated{false};
         bool supported{false};
+        bool retry_soon{false};
         std::chrono::steady_clock::time_point checked_at{};
+        std::string profile_id;
         std::string detail;
     };
 

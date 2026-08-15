@@ -98,9 +98,9 @@ identified.
 
 - Taskbar, File Explorer, and Start are certified only for exact compatibility
   profiles; broad Windows-build coverage remains incomplete.
-- The compiled compatibility catalog currently approves only one exact Windows
-  11 25H2 revision. A clean multi-build VM matrix remains required for broad
-  production support.
+- The compiled compatibility catalog currently approves only two exact Windows
+  11 25H2 revisions (`26200.8875` and `26200.9168`). A clean multi-build VM
+  matrix remains required for broad production support.
 - The Start menu adapter currently supports only the `Windows.UI.Xaml` tree,
   the `VisualDiagConnection1` endpoint, and three exact root type identities. A
   WinUI 3-only or redesigned Start menu is unsupported and must fail closed.

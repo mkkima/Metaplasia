@@ -170,8 +170,175 @@ const std::vector<CompatibilityProfile>& CompiledProfiles() {
                     "windows.ui.xaml.pdb-"
                     "CE725F5F9540C1A2B4C5E2D97FBFC7651"},
             }},
+        {
+            "win11-25h2-26200.9168-x64-taskbar-v1",
+            AdapterId::taskbar_clock,
+            {10, 0, 26200, 9168},
+            {
+                {
+                    L"explorer.exe",
+                    L"explorer.exe",
+                    "8664-77CB28FB-00334000-0033D30D-explorer.pdb-"
+                    "4BF64FA877FDAC2DD1BCD616FA92B2631"},
+                {
+                    L"user32.dll",
+                    L"System32\\user32.dll",
+                    "8664-5D257817-001C6000-001D1E86-user32.pdb-"
+                    "6C14B92F46F8F9BF4CF059759A9186A81"},
+                {
+                    L"Taskbar.dll",
+                    L"System32\\Taskbar.dll",
+                    "8664-AF54E51D-00302000-00305E30-Taskbar.pdb-"
+                    "6C3AA9496CD5913CBF5AE8A6F3B506AA1"},
+                {
+                    L"Taskbar.View.dll",
+                    L"SystemApps\\MicrosoftWindows.Client.Core_"
+                    L"cw5n1h2txyewy\\Taskbar.View.dll",
+                    "8664-6A3CD591-0098B000-00985653-Taskbar.View.pdb-"
+                    "9F389A858FC9409ABBC518000E8634901"},
+                {
+                    L"twinui.pcshell.dll",
+                    L"System32\\twinui.pcshell.dll",
+                    "8664-1C8AB037-00999000-0099F555-twinui.pcshell.pdb-"
+                    "FCFCF4EFC4BB468AC3C12242EB80463A1"},
+            }},
+        {
+            "win11-25h2-26200.9168-x64-explorer-v2",
+            AdapterId::file_explorer_title,
+            {10, 0, 26200, 9168},
+            {
+                {
+                    L"explorer.exe",
+                    L"explorer.exe",
+                    "8664-77CB28FB-00334000-0033D30D-explorer.pdb-"
+                    "4BF64FA877FDAC2DD1BCD616FA92B2631"},
+                {
+                    L"user32.dll",
+                    L"System32\\user32.dll",
+                    "8664-5D257817-001C6000-001D1E86-user32.pdb-"
+                    "6C14B92F46F8F9BF4CF059759A9186A81"},
+                {
+                    L"dwmapi.dll",
+                    L"System32\\dwmapi.dll",
+                    "8664-919E85B3-0002F000-00031DF5-dwmapi.pdb-"
+                    "03913F6D9E7C96E9D1A6E3222247C9B11"},
+                {
+                    L"Microsoft.Internal.FrameworkUdk.dll",
+                    L"SystemApps\\Microsoft.WindowsAppRuntime.CBS_"
+                    L"8wekyb3d8bbwe\\Microsoft.Internal.FrameworkUdk.dll",
+                    "8664-2802D610-000F1000-000F73CD-"
+                    "Microsoft.Internal.FrameworkUdk.pdb-"
+                    "B34F54F27057CA2C71EB6F152D7679731"},
+            }},
+        {
+            "win11-25h2-26200.9168-x64-start-xaml-v1",
+            AdapterId::start_menu_xaml,
+            {10, 0, 26200, 9168},
+            {
+                {
+                    L"StartMenuExperienceHost.exe",
+                    L"SystemApps\\Microsoft.Windows.StartMenuExperienceHost_"
+                    L"cw5n1h2txyewy\\StartMenuExperienceHost.exe",
+                    "8664-B4C805A1-00038000-00043430-"
+                    "startmenuexperiencehost.pdb-"
+                    "19EE505E5FFD2431C0DC5C9DBBDB6BEA1"},
+                {
+                    L"Windows.UI.Xaml.dll",
+                    L"System32\\Windows.UI.Xaml.dll",
+                    "8664-7451281F-0110E000-01118268-"
+                    "windows.ui.xaml.pdb-"
+                    "B7398E0107885525880FA8C45B816A161"},
+            }},
     };
     return profiles;
+}
+
+std::vector<ModuleRequirement> DiagnosticRequirements(
+    const AdapterId adapter) {
+    std::vector<ModuleRequirement> requirements;
+    const auto append = [&requirements, adapter](
+                            const CompatibilityProfile& profile) {
+        if (profile.adapter != adapter) {
+            return;
+        }
+        for (const auto& candidate : profile.modules) {
+            const bool already_present = std::ranges::any_of(
+                requirements,
+                [&candidate](const ModuleRequirement& existing) {
+                    return EqualsIgnoreCase(
+                        existing.module_name,
+                        candidate.module_name);
+                });
+            if (!already_present) {
+                requirements.push_back(candidate);
+            }
+        }
+    };
+    for (const auto& profile : CompiledProfiles()) {
+        append(profile);
+    }
+    {
+        std::lock_guard lock(g_external_profiles_mutex);
+        for (const auto& profile : g_external_profiles) {
+            append(profile);
+        }
+    }
+    return requirements;
+}
+
+struct ModuleInspection final {
+    std::vector<ModuleObservation> observations;
+    std::string failure;
+};
+
+Result<ModuleInspection> InspectRequiredModules(
+    const AdapterId adapter,
+    const std::uint32_t process_id,
+    const std::span<const ModuleRequirement> requirements) {
+    auto modules = platform::EnumerateProcessModules(process_id);
+    if (!modules.ok()) {
+        return modules.status();
+    }
+    UniqueHandle process(::OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+        FALSE,
+        process_id));
+    if (!process) {
+        return Status::FromWin32(
+            "OpenProcess(compatibility inspection)",
+            ::GetLastError());
+    }
+
+    ModuleInspection inspection;
+    for (const auto& requirement : requirements) {
+        for (const auto& module : modules.value()) {
+            if (!EqualsIgnoreCase(module.module_name, requirement.module_name)) {
+                continue;
+            }
+            auto identity = symbols::InspectMappedPeImage(
+                process.get(),
+                module.base_address,
+                module.image_size,
+                module.image_path);
+            if (!identity.ok()) {
+                inspection.failure =
+                    "Unable to inspect mapped module " +
+                    ModuleNameForDetail(requirement.module_name) + ": " +
+                    identity.status().message();
+                return inspection;
+            }
+            inspection.observations.push_back(ModuleObservation{
+                module.module_name,
+                module.image_path,
+                identity.value().CompatibilityKey()});
+        }
+    }
+    if (inspection.observations.empty()) {
+        inspection.failure =
+            "No diagnostic modules for adapter " +
+            std::string(AdapterName(adapter)) + " are loaded in the target";
+    }
+    return inspection;
 }
 
 Result<std::optional<CompatibilityProfile>> FindProfile(
@@ -377,11 +544,25 @@ Result<CompatibilityDecision> EvaluateProcess(
         return selected_profile.status();
     }
     if (!selected_profile.value().has_value()) {
-        return Unsupported(
+        auto decision = Unsupported(
             adapter,
             windows.value(),
             "No approved compatibility profile for Windows " +
                 windows.value().ToString());
+        const auto requirements = DiagnosticRequirements(adapter);
+        auto inspection =
+            InspectRequiredModules(adapter, process_id, requirements);
+        if (!inspection.ok()) {
+            decision.detail +=
+                "; mapped-module observation failed: " +
+                inspection.status().message();
+        } else {
+            if (!inspection.value().failure.empty()) {
+                decision.detail += "; " + inspection.value().failure;
+            }
+            decision.modules = std::move(inspection).value().observations;
+        }
+        return decision;
     }
     const CompatibilityProfile profile =
         std::move(selected_profile).value().value();
@@ -389,52 +570,24 @@ Result<CompatibilityDecision> EvaluateProcess(
     if (!windows_directory.ok()) {
         return windows_directory.status();
     }
-    auto modules = platform::EnumerateProcessModules(process_id);
-    if (!modules.ok()) {
-        return modules.status();
+    auto inspection =
+        InspectRequiredModules(adapter, process_id, profile.modules);
+    if (!inspection.ok()) {
+        return inspection.status();
     }
-    UniqueHandle process(::OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
-        FALSE,
-        process_id));
-    if (!process) {
-        return Status::FromWin32(
-            "OpenProcess(compatibility inspection)",
-            ::GetLastError());
-    }
-
-    std::vector<ModuleObservation> observations;
-    for (const auto& requirement : profile.modules) {
-        for (const auto& module : modules.value()) {
-            if (!EqualsIgnoreCase(module.module_name, requirement.module_name)) {
-                continue;
-            }
-            auto identity = symbols::InspectMappedPeImage(
-                process.get(),
-                module.base_address,
-                module.image_size,
-                module.image_path);
-            if (!identity.ok()) {
-                auto decision = Unsupported(
-                    adapter,
-                    windows.value(),
-                    "Unable to inspect mapped module " +
-                        ModuleNameForDetail(requirement.module_name) +
-                        ": " + identity.status().message());
-                decision.profile_id = profile.id;
-                decision.modules = std::move(observations);
-                return decision;
-            }
-            observations.push_back(ModuleObservation{
-                module.module_name,
-                module.image_path,
-                identity.value().CompatibilityKey()});
-        }
+    if (!inspection.value().failure.empty()) {
+        auto decision = Unsupported(
+            adapter,
+            windows.value(),
+            inspection.value().failure);
+        decision.profile_id = profile.id;
+        decision.modules = std::move(inspection).value().observations;
+        return decision;
     }
     return EvaluateProfile(
         profile,
         windows.value(),
-        observations,
+        inspection.value().observations,
         windows_directory.value());
 }
 

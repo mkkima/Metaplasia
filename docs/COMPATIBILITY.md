@@ -14,9 +14,12 @@ Each adapter has an independent compiled profile containing:
   PDB age encoded in the module compatibility key;
 - an adapter-specific profile identifier.
 
-The current initial catalog contains profiles only for the live-tested Windows
-11 25H2 `10.0.26200.8875` x64 environment. It does not imply support for any
-other revision in the 26200 family.
+The compiled catalog contains separate exact profiles for Windows 11 25H2 x64
+revisions `10.0.26200.8875` and `10.0.26200.9168`. The latter was captured from
+the mapped shell processes and cross-checked against the protected on-disk
+images on the affected machine. Neither entry implies support for any other
+revision in the 26200 family, and broad compatibility still requires a clean
+multi-build VM matrix.
 
 ## Signed external profiles
 
@@ -67,9 +70,11 @@ The report does not require a running host:
 ```
 
 It prints the true Windows version, selected shell PID, decision, profile ID,
-mapped module paths, and exact observed keys. `module-info` remains useful for
-offline PE inspection, but its result alone must never be copied into the
-catalog as approval.
+mapped module paths, and exact observed keys. Unknown Windows revisions remain
+blocked, but the report now still inspects the bounded adapter-specific module
+set so the output contains the evidence required to diagnose and add a new
+exact profile. `module-info` remains useful for offline PE inspection, but its
+result alone must never be copied into the catalog as approval.
 
 ## Adding a profile
 

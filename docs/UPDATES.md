@@ -59,18 +59,20 @@ extracts only the exact allowed filenames, stages them on the portable
 directory's volume, and keeps rollback copies until the complete replacement
 succeeds.
 
-Only a pushed tag matching `vMAJOR.MINOR.PATCH` is a release flag. Ordinary
+Only an explicit release command for a version tag is a release flag. Ordinary
 pushes to `main`, feature branches, and non-version tags do not publish an
-update. The workflow also refuses a tag unless the tag version exactly matches
+update. The publisher also refuses a tag unless the tag version exactly matches
 `CMakeLists.txt`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
 
-An explicitly pushed `dev-vMAJOR.MINOR.PATCH` tag publishes a separate unsigned
-Debug portable ZIP as a GitHub pre-release. Its package manifest is signed with
-an isolated development Ed25519 key and advanced through the `development`
-channel release, so development portable copies support the same automatic
-check/download and manual install flow. Development copies never consume stable
-metadata, stable copies never consume development metadata, and the development
-channel does not weaken the fail-closed `v*` release workflow.
+The local development publisher creates and pushes an explicit
+`dev-vMAJOR.MINOR.PATCH` tag, publishes an unsigned Debug portable ZIP as a
+GitHub pre-release through the GitHub REST API, and advances the `development`
+channel. It does not use GitHub Actions or `gh`. The package manifest is signed
+with an isolated development Ed25519 key, so development portable copies support
+the same automatic check/download and manual install flow. Development copies
+never consume stable metadata, stable copies never consume development metadata,
+and the development channel does not weaken the fail-closed `v*` release
+workflow.
 
 ## One-time GitHub repository setup
 
@@ -93,10 +95,9 @@ Configure these GitHub Actions secrets:
 - `METAPLASIA_CODESIGN_PFX_B64`: Base64 of the Authenticode PFX used for all five binaries.
 - `METAPLASIA_CODESIGN_PASSWORD`: the PFX password.
 
-Generate a second, independent Ed25519 key for development updates and configure:
-
-- `METAPLASIA_DEVELOPMENT_UPDATE_PUBLIC_KEY`: Base64 of the raw 32-byte public key.
-- `METAPLASIA_DEVELOPMENT_UPDATE_PRIVATE_KEY_PEM_B64`: Base64 of its private PEM.
+Generate a second, independent Ed25519 key for development updates. Commit only
+its raw Base64 public key in `src-tauri/development-update-public-key.txt`. Keep
+the private PEM outside the repository and pass its path to the local publisher.
 
 Never reuse either private key across channels. A compromised development key
 must not authorize a stable update.
@@ -106,10 +107,10 @@ protect the `v*` tag pattern so an ordinary repository write cannot silently
 turn an arbitrary commit into signed binaries. The workflow targets this
 environment before any signing secret is materialized.
 
-The workflow derives the public key from the private key and fails closed if it
-does not match `METAPLASIA_UPDATE_PUBLIC_KEY`. Release builds embed only the
-public key. The private update key and PFX exist only as GitHub secrets and
-temporary runner files.
+Each publisher derives the public key from the supplied private key and fails
+closed if it does not match the key trusted by the corresponding channel.
+Release builds embed only a public key. Private signing material must remain
+outside the repository.
 
 ## Publishing a release
 
@@ -126,20 +127,22 @@ creates the ZIP, creates and signs `portable-update.json`, and publishes the
 assets to a GitHub Release. Existing updater-enabled portable copies will then
 see the release through the automatic or manual check.
 
-A development portable build can be published independently from the stable
-Authenticode configuration:
+A development portable build is built, tested, signed, tagged, and published
+locally. The private PEM must be the same key already trusted by installed
+development copies:
 
 ```powershell
-git tag dev-v0.2.0
-git push origin dev-v0.2.0
+.\tools\publish-development-portable.ps1 `
+  -PrivateKeyPath D:\secure\metaplasia-development-update-private.pem `
+  -Publish
 ```
 
-This creates a clearly labelled GitHub pre-release containing the five-file
-Debug runtime, checksum, signed manifest, and manifest signature. After the
-versioned package exists, the workflow advances the signed metadata on the
-`development` channel release. Development copies then discover it through
-automatic checks or the **Check now** button and install it through the same
-transactional portable replacement helper.
+The script requires a clean `main` commit already present at `origin/main`,
+validates that all project versions match, derives and compares the public key,
+builds the complete five-file Debug runtime, runs native tests, signs and verifies
+the manifest, creates the annotated tag, publishes the pre-release, and advances
+the channel metadata signature-first. Omitting `-Publish` performs all local
+validation and writes assets below `out/releases` without changing GitHub.
 
 The original `dev-v0.1.0` package was published without an embedded development
 key and cannot be changed retroactively. It requires one manual replacement with

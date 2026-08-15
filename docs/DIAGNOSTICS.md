@@ -24,8 +24,13 @@ only the newest 500 valid entries.
 
 Every record has schema version, UTC timestamp, severity, component, event,
 target, process ID, and message. User-entered customization values are omitted;
-configuration events record only that a setting changed. Logs remain local and
-are never included in update requests or sent over the network.
+configuration events identify the exact setting and configuration generation
+without recording its value. Compatibility transitions record the result,
+adapter, exact Windows revision, selected profile, decision detail, and the
+path plus compatibility key of every inspected mapped module. Identical
+compatibility decisions are written only when the PID or decision changes, not
+on every monitor pass. Logs remain local and are never included in update
+requests or sent over the network.
 
 ## Native failure interpretation
 
