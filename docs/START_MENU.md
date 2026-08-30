@@ -86,6 +86,15 @@ child index are captured before mutation. Disable restores those values in
 dependency order; a failed restoration keeps its snapshot so a later
 configuration pass can retry.
 
+The side panels are created only after the native frame's complete clipping
+chain has been expanded. When Windows replaces only `StartBlendedFlexFrame`,
+Metaplasia removes its injected scene but preserves the already observed native
+descendant relations, because Windows can publish the replacement frame after
+those descendants without publishing them again. A transient frame-attachment
+failure leaves the native menu intact and is retried on a later visual-tree
+event; a successful retry rebuilds all three panels from the preserved native
+relations.
+
 In Three-panel mode, **Hide All apps content** changes only the visibility of
 the injected list. The left panel and the full three-panel frame stay attached,
 so the setting can be changed live without restarting Start or changing the
