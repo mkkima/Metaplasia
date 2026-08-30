@@ -401,12 +401,29 @@ public:
         delete reinterpret_cast<LayoutSnapshot*>(snapshot);
     }
 
+    HRESULT IsDescendantOf(
+        const std::uint64_t descendant_handle,
+        const std::uint64_t ancestor_handle,
+        bool& is_descendant) noexcept override {
+        if (Find(descendant_handle) == nullptr ||
+            Find(ancestor_handle) == nullptr) {
+            return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        is_descendant = descendant_relation_valid &&
+                        descendant_handle != detached_descendant_handle;
+        return S_OK;
+    }
+
     HRESULT CreateStartMenuFrameEnvelope(
         const std::uint64_t frame_handle,
         std::uint64_t& snapshot) noexcept override {
         snapshot = 0;
         if (Find(frame_handle) == nullptr) {
             return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+        }
+        if (frame_envelope_failures_remaining != 0) {
+            --frame_envelope_failures_remaining;
+            return E_FAIL;
         }
         auto* token = new (std::nothrow) std::uint8_t(1);
         if (token == nullptr) {
@@ -430,6 +447,7 @@ public:
 
     void ReleaseStartMenuFrameEnvelopeSnapshot(
         const std::uint64_t snapshot) noexcept override {
+        frame_envelope_active = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -478,6 +496,7 @@ public:
 
     void ReleaseStartMenuThreePanelSurfaceSnapshot(
         const std::uint64_t snapshot) noexcept override {
+        surface_active = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -514,6 +533,7 @@ public:
 
     void ReleaseStartMenuRecommendedSnapshot(
         const std::uint64_t snapshot) noexcept override {
+        recommended_attached = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -560,6 +580,8 @@ public:
 
     void ReleaseStartMenuAllAppsSnapshot(
         const std::uint64_t snapshot) noexcept override {
+        all_apps_attached = false;
+        all_apps_visible = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -568,10 +590,13 @@ public:
     bool all_apps_visible{false};
     bool recommended_attached{false};
     bool frame_envelope_active{false};
+    bool descendant_relation_valid{true};
+    std::uint64_t detached_descendant_handle{0};
     std::size_t surface_writes{0};
     std::size_t all_apps_writes{0};
     std::size_t recommended_writes{0};
     std::size_t frame_envelope_writes{0};
+    std::size_t frame_envelope_failures_remaining{0};
     std::uint64_t last_surface_main_menu{0};
     std::uint64_t last_surface_acrylic_border{0};
     std::uint64_t last_surface_acrylic_overlay{0};
@@ -906,7 +931,14 @@ int main() {
             L"Windows.UI.Xaml.Controls.Border",
             L"AcrylicOverlay",
             515) == S_OK,
-        "create panel surfaces after both native acrylic layers exist");
+        "observe the native acrylic layers before the frame is ready");
+    Require(
+        !layout_accessor.surface_active &&
+            !layout_accessor.all_apps_attached &&
+            !layout_accessor.frame_envelope_active &&
+            !layout_accessor.Find(500)->layout_active,
+        "leave the native Start geometry untouched until the complete scene "
+        "can be committed");
     Require(
         layout_style.OnElementAdded(
             518,
@@ -925,20 +957,40 @@ int main() {
             520) == S_OK,
         "observe duplicate companion surfaces without selecting them");
     Require(
-        layout_accessor.last_surface_main_menu == 500 &&
-            layout_accessor.last_surface_acrylic_border == 501 &&
-            layout_accessor.last_surface_acrylic_overlay == 502,
-        "bind the three-panel surface only to the MainMenu descendants");
-    Require(
         layout_style.OnElementAdded(
             503,
             L"Windows.UI.Xaml.Controls.Grid",
             L"TopLevelHeader") == S_OK,
         "track the shared three-column content host");
+    layout_accessor.frame_envelope_failures_remaining = 1;
+    Require(
+        FAILED(layout_style.OnElementAdded(
+            506,
+            L"StartMenu.StartBlendedFlexFrame")),
+        "surface a transient frame-envelope failure");
+    Require(
+        !layout_accessor.frame_envelope_active &&
+            !layout_accessor.surface_active &&
+            !layout_accessor.all_apps_attached &&
+            !layout_accessor.Find(506)->layout_active &&
+            !layout_accessor.Find(500)->layout_active,
+        "roll back every three-panel mutation after an incomplete frame");
     Require(
         layout_style.OnElementAdded(
-            506,
-            L"StartMenu.StartBlendedFlexFrame") == S_OK &&
+            504,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"UnrelatedVisual") == S_FALSE &&
+            layout_accessor.frame_envelope_active &&
+            layout_accessor.surface_active &&
+            layout_accessor.all_apps_attached &&
+            !layout_accessor.recommended_attached,
+        "retry atomically and allow an empty Recommended panel");
+    Require(
+        layout_accessor.last_surface_main_menu == 500 &&
+            layout_accessor.last_surface_acrylic_border == 501 &&
+            layout_accessor.last_surface_acrylic_overlay == 502,
+        "bind the three-panel surface only to the active MainMenu descendants");
+    Require(
         layout_style.OnElementAdded(
             507,
             L"StartMenu.SearchBoxToggleButton",
@@ -1097,6 +1149,38 @@ int main() {
         layout_accessor.recommended_attached &&
         layout_accessor.frame_envelope_active,
         "recreate every three-panel resource after a live re-enable");
+    layout_accessor.Add(522);
+    layout_accessor.descendant_relation_valid = false;
+    Require(
+        layout_style.OnElementAdded(
+            522,
+            L"StartMenu.StartBlendedFlexFrame") == S_OK &&
+            !layout_accessor.frame_envelope_active &&
+            !layout_accessor.surface_active &&
+            !layout_accessor.all_apps_attached &&
+            !layout_accessor.Find(522)->layout_active,
+        "keep both frames native while a replacement frame has stale "
+        "descendant relations");
+    layout_accessor.descendant_relation_valid = true;
+    layout_accessor.detached_descendant_handle = 506;
+    Require(
+        layout_style.OnElementAdded(
+            504,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"UnrelatedVisual") == S_FALSE &&
+            layout_accessor.frame_envelope_active &&
+            layout_accessor.surface_active &&
+            layout_accessor.all_apps_attached &&
+            layout_accessor.Find(522)->layout_active &&
+            !layout_accessor.Find(506)->layout_active,
+        "commit the replacement scene only after its native relations are "
+        "valid");
+    layout_style.OnElementRemoved(506);
+    Require(
+        layout_accessor.frame_envelope_active &&
+            layout_accessor.surface_active &&
+            layout_accessor.all_apps_attached,
+        "ignore late removal of the detached old frame");
     Require(
         layout_style.Configure(
             false,

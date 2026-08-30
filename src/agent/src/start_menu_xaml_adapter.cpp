@@ -876,6 +876,56 @@ public:
         delete reinterpret_cast<ElementLayoutSnapshot*>(snapshot);
     }
 
+    [[nodiscard]] HRESULT IsDescendantOf(
+        const std::uint64_t descendant_handle,
+        const std::uint64_t ancestor_handle,
+        bool& is_descendant) noexcept override {
+        is_descendant = false;
+        if (descendant_handle == 0 || ancestor_handle == 0) {
+            return E_INVALIDARG;
+        }
+        ComPtr<IInspectable> descendant_inspectable;
+        ComPtr<IInspectable> ancestor_inspectable;
+        HRESULT result = ResolveInspectable(
+            descendant_handle,
+            descendant_inspectable);
+        if (FAILED(result) ||
+            FAILED(result = ResolveInspectable(
+                       ancestor_handle,
+                       ancestor_inspectable))) {
+            return result;
+        }
+        ComPtr<IUnknown> ancestor_identity;
+        ComPtr<FrameworkElement> current;
+        if (FAILED(result = ancestor_inspectable.As(&ancestor_identity)) ||
+            FAILED(result = descendant_inspectable.As(&current))) {
+            return result;
+        }
+        constexpr std::size_t kMaximumAncestorDepth = 64;
+        for (std::size_t depth = 0;
+             depth < kMaximumAncestorDepth && current != nullptr;
+             ++depth) {
+            ComPtr<IUnknown> current_identity;
+            if (FAILED(result = current.As(&current_identity))) {
+                return result;
+            }
+            if (current_identity.Get() == ancestor_identity.Get()) {
+                is_descendant = true;
+                return S_OK;
+            }
+            ComPtr<DependencyObject> parent;
+            if (FAILED(result = current->get_Parent(parent.GetAddressOf()))) {
+                return result;
+            }
+            if (parent == nullptr) {
+                current.Reset();
+            } else if (FAILED(result = parent.As(&current))) {
+                return result;
+            }
+        }
+        return current == nullptr ? S_OK : E_UNEXPECTED;
+    }
+
     [[nodiscard]] HRESULT CreateStartMenuFrameEnvelope(
         const std::uint64_t frame_handle,
         std::uint64_t& snapshot) noexcept override {

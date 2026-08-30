@@ -65,11 +65,6 @@ struct ProfilePackLoadResult final {
 };
 
 [[nodiscard]] std::string_view AdapterName(AdapterId adapter) noexcept;
-// Returns true only for startup observations that can become valid without a
-// Windows or Metaplasia update. Permanent identity/profile mismatches remain
-// fail-closed.
-[[nodiscard]] bool IsTransientRejection(
-    const CompatibilityDecision& decision) noexcept;
 [[nodiscard]] Result<WindowsVersion> QueryWindowsVersion();
 
 // Pure profile evaluation used by runtime inspection and deterministic tests.

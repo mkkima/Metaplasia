@@ -86,6 +86,15 @@ child index are captured before mutation. Disable restores those values in
 dependency order; a failed restoration keeps its snapshot so a later
 configuration pass can retry.
 
+The expanded clipping envelope, the three acrylic surfaces, and their injected
+content are committed as one scene. Until the current `MainMenu` is confirmed
+as a descendant of the current frame and every required surface is available,
+tracked native elements keep their original geometry. A transient attachment
+failure rolls back the complete scene and retries on a later visual-tree event;
+the adapter never leaves a wide inner frame inside the stock narrow popup.
+Replacement frames are ancestry-checked so late removal of an older frame
+cannot tear down the current scene.
+
 In Three-panel mode, **Hide All apps content** changes only the visibility of
 the injected list. The left panel and the full three-panel frame stay attached,
 so the setting can be changed live without restarting Start or changing the

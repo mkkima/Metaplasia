@@ -250,6 +250,10 @@ public:
         std::uint64_t snapshot) noexcept = 0;
     virtual void ReleaseElementLayoutSnapshot(
         std::uint64_t snapshot) noexcept = 0;
+    [[nodiscard]] virtual HRESULT IsDescendantOf(
+        std::uint64_t descendant_handle,
+        std::uint64_t ancestor_handle,
+        bool& is_descendant) noexcept = 0;
     [[nodiscard]] virtual HRESULT CreateStartMenuFrameEnvelope(
         std::uint64_t frame_handle,
         std::uint64_t& snapshot) noexcept = 0;
@@ -396,6 +400,7 @@ private:
         std::uint64_t panel_surface_snapshot{0};
         std::uint64_t recommended_snapshot{0};
         std::uint64_t all_apps_snapshot{0};
+        bool scene_active{false};
         std::array<Candidate, 8> acrylic_border_candidates{};
         std::array<Candidate, 8> acrylic_overlay_candidates{};
         std::array<Candidate, 8> main_content_candidates{};
@@ -420,7 +425,10 @@ private:
         std::wstring_view type_name,
         std::wstring_view element_name,
         std::uint64_t parent_handle) noexcept;
+    [[nodiscard]] bool StartMenuSceneNeedsRetry() const noexcept;
     [[nodiscard]] HRESULT RefreshStartMenuLayout() noexcept;
+    void ReleaseStartMenuSceneSnapshots(
+        bool release_frame_envelope) noexcept;
     void ForgetStartMenuLayoutHandle(std::uint64_t handle) noexcept;
     [[nodiscard]] HRESULT EnsureTaskbarLayoutRoot(
         std::uint64_t handle) noexcept;

@@ -441,7 +441,8 @@ HRESULT ShellXamlStyle::OnElementAdded(
                 return refresh_result;
             }
         }
-        if (start_menu_observe_result == S_OK) {
+        if (start_menu_observe_result == S_OK ||
+            StartMenuSceneNeedsRetry()) {
             const HRESULT refresh_result = RefreshStartMenuLayout();
             if (FAILED(refresh_result)) {
                 return refresh_result;
@@ -501,7 +502,9 @@ HRESULT ShellXamlStyle::OnElementAdded(
                 result = refresh_result;
             }
         }
-        if (SUCCEEDED(result) && start_menu_observe_result == S_OK) {
+        if (SUCCEEDED(result) &&
+            (start_menu_observe_result == S_OK ||
+             StartMenuSceneNeedsRetry())) {
             result = RefreshStartMenuLayout();
         }
         return result;
@@ -732,7 +735,9 @@ HRESULT ShellXamlStyle::OnElementAdded(
             write_result = refresh_result;
         }
     }
-    if (SUCCEEDED(write_result) && start_menu_observe_result == S_OK) {
+    if (SUCCEEDED(write_result) &&
+        (start_menu_observe_result == S_OK ||
+         StartMenuSceneNeedsRetry())) {
         write_result = RefreshStartMenuLayout();
     }
     return write_result;
@@ -942,11 +947,27 @@ HRESULT ShellXamlStyle::ApplyStartMenuLayout(
     const bool layout_enabled =
         enabled && target_ == protocol::AgentTarget::start_menu &&
         start_menu_three_panel_layout_enabled_.load(
-            std::memory_order_acquire);
+            std::memory_order_acquire) &&
+        start_menu_layout_.scene_active;
     if (!layout_enabled) {
         return accessor_.RestoreElementLayout(
             element.handle,
             element.original_element_layout);
+    }
+    if (element.handle != start_menu_layout_.frame_handle) {
+        bool belongs_to_active_frame = false;
+        const HRESULT relation_result = accessor_.IsDescendantOf(
+            element.handle,
+            start_menu_layout_.frame_handle,
+            belongs_to_active_frame);
+        if (FAILED(relation_result)) {
+            return relation_result;
+        }
+        if (!belongs_to_active_frame) {
+            return accessor_.RestoreElementLayout(
+                element.handle,
+                element.original_element_layout);
+        }
     }
     return accessor_.WriteElementLayout(
         element.handle,
@@ -996,6 +1017,12 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
         if (start_menu_layout_.main_menu_handle == 0) {
             return;
         }
+        const std::uint64_t previous_border =
+            start_menu_layout_.acrylic_border_handle;
+        const std::uint64_t previous_content =
+            start_menu_layout_.main_content_handle;
+        const std::uint64_t previous_overlay =
+            start_menu_layout_.acrylic_overlay_handle;
         start_menu_layout_.acrylic_border_handle = find_child(
             start_menu_layout_.acrylic_border_candidates,
             start_menu_layout_.main_menu_handle);
@@ -1007,14 +1034,29 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
                 start_menu_layout_.acrylic_overlay_candidates,
                 start_menu_layout_.main_content_handle);
         }
+        if (start_menu_layout_.scene_active &&
+            (previous_border != start_menu_layout_.acrylic_border_handle ||
+             previous_content != start_menu_layout_.main_content_handle ||
+             previous_overlay !=
+                 start_menu_layout_.acrylic_overlay_handle)) {
+            ReleaseStartMenuSceneSnapshots(true);
+        }
     };
     if (type_name == L"StartMenu.StartBlendedFlexFrame" &&
         element_name.empty()) {
+        if (start_menu_layout_.frame_handle != 0 &&
+            start_menu_layout_.frame_handle != handle) {
+            ReleaseStartMenuSceneSnapshots(true);
+        }
         start_menu_layout_.frame_handle = handle;
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
         element_name == L"MainMenu") {
+        if (start_menu_layout_.main_menu_handle != 0 &&
+            start_menu_layout_.main_menu_handle != handle) {
+            ReleaseStartMenuSceneSnapshots(true);
+        }
         start_menu_layout_.main_menu_handle = handle;
         resolve_main_surface();
         return S_OK;
@@ -1053,6 +1095,18 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
         element_name == L"TopLevelSuggestionsRoot" && parent_handle != 0) {
+        if (start_menu_layout_.recommended_handle != 0 &&
+            start_menu_layout_.recommended_handle != handle &&
+            start_menu_layout_.recommended_snapshot != 0) {
+            const bool mutation_was_in_progress =
+                start_menu_layout_mutation_in_progress_;
+            start_menu_layout_mutation_in_progress_ = true;
+            accessor_.ReleaseStartMenuRecommendedSnapshot(
+                start_menu_layout_.recommended_snapshot);
+            start_menu_layout_mutation_in_progress_ =
+                mutation_was_in_progress;
+            start_menu_layout_.recommended_snapshot = 0;
+        }
         start_menu_layout_.recommended_handle = handle;
         start_menu_layout_.recommended_parent_handle = parent_handle;
         return S_OK;
@@ -1060,37 +1114,83 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
     return S_FALSE;
 }
 
+bool ShellXamlStyle::StartMenuSceneNeedsRetry() const noexcept {
+    if (target_ != protocol::AgentTarget::start_menu ||
+        !enabled_.load(std::memory_order_acquire) ||
+        !start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire)) {
+        return false;
+    }
+    if (!start_menu_layout_.scene_active) {
+        return start_menu_layout_.frame_handle != 0 &&
+               start_menu_layout_.main_menu_handle != 0 &&
+               start_menu_layout_.acrylic_border_handle != 0 &&
+               start_menu_layout_.acrylic_overlay_handle != 0;
+    }
+    return start_menu_layout_.all_apps_snapshot == 0 ||
+           (start_menu_layout_.recommended_handle != 0 &&
+            start_menu_layout_.recommended_parent_handle != 0 &&
+            start_menu_layout_.recommended_snapshot == 0);
+}
+
+void ShellXamlStyle::ReleaseStartMenuSceneSnapshots(
+    const bool release_frame_envelope) noexcept {
+    start_menu_layout_.scene_active = false;
+    const bool mutation_was_in_progress =
+        start_menu_layout_mutation_in_progress_;
+    start_menu_layout_mutation_in_progress_ = true;
+    if (start_menu_layout_.all_apps_snapshot != 0) {
+        accessor_.ReleaseStartMenuAllAppsSnapshot(
+            start_menu_layout_.all_apps_snapshot);
+        start_menu_layout_.all_apps_snapshot = 0;
+    }
+    if (start_menu_layout_.recommended_snapshot != 0) {
+        accessor_.ReleaseStartMenuRecommendedSnapshot(
+            start_menu_layout_.recommended_snapshot);
+        start_menu_layout_.recommended_snapshot = 0;
+    }
+    if (start_menu_layout_.panel_surface_snapshot != 0) {
+        accessor_.ReleaseStartMenuThreePanelSurfaceSnapshot(
+            start_menu_layout_.panel_surface_snapshot);
+        start_menu_layout_.panel_surface_snapshot = 0;
+    }
+    if (release_frame_envelope &&
+        start_menu_layout_.frame_envelope_snapshot != 0) {
+        accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
+            start_menu_layout_.frame_envelope_snapshot);
+        start_menu_layout_.frame_envelope_snapshot = 0;
+    }
+    start_menu_layout_mutation_in_progress_ = mutation_was_in_progress;
+    for (auto& element : tracked_) {
+        if (element.handle != 0 &&
+            element.start_menu_layout_rule != StartMenuLayoutRule::none) {
+            static_cast<void>(accessor_.RestoreElementLayout(
+                element.handle,
+                element.original_element_layout));
+        }
+    }
+}
+
 HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
     if (target_ != protocol::AgentTarget::start_menu) {
         return S_OK;
     }
     if (start_menu_layout_mutation_in_progress_) {
-        return S_FALSE;
+        return S_OK;
     }
     const bool layout_enabled =
         enabled_.load(std::memory_order_acquire) &&
         start_menu_three_panel_layout_enabled_.load(
             std::memory_order_acquire);
-    HRESULT first_failure = S_OK;
-    const auto preserve_first_failure =
-        [&first_failure](const HRESULT candidate) noexcept {
-            if (FAILED(candidate) && SUCCEEDED(first_failure)) {
-                first_failure = candidate;
-            }
-        };
-
     if (!layout_enabled) {
-        if (start_menu_layout_.frame_envelope_snapshot != 0) {
-            const HRESULT restore_result =
-                accessor_.RestoreStartMenuFrameEnvelope(
-                    start_menu_layout_.frame_envelope_snapshot);
-            preserve_first_failure(restore_result);
-            if (SUCCEEDED(restore_result)) {
-                accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
-                    start_menu_layout_.frame_envelope_snapshot);
-                start_menu_layout_.frame_envelope_snapshot = 0;
-            }
-        }
+        start_menu_layout_.scene_active = false;
+        HRESULT first_failure = S_OK;
+        const auto preserve_first_failure =
+            [&first_failure](const HRESULT candidate) noexcept {
+                if (FAILED(candidate) && SUCCEEDED(first_failure)) {
+                    first_failure = candidate;
+                }
+            };
         if (start_menu_layout_.all_apps_snapshot != 0) {
             start_menu_layout_mutation_in_progress_ = true;
             const HRESULT restore_result = accessor_.RestoreStartMenuAllApps(
@@ -1128,62 +1228,141 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
                 start_menu_layout_.panel_surface_snapshot = 0;
             }
         }
+        if (start_menu_layout_.panel_surface_snapshot == 0 &&
+            start_menu_layout_.frame_envelope_snapshot != 0) {
+            const HRESULT restore_result =
+                accessor_.RestoreStartMenuFrameEnvelope(
+                    start_menu_layout_.frame_envelope_snapshot);
+            preserve_first_failure(restore_result);
+            if (SUCCEEDED(restore_result)) {
+                accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
+                    start_menu_layout_.frame_envelope_snapshot);
+                start_menu_layout_.frame_envelope_snapshot = 0;
+            }
+        }
         return first_failure;
     }
 
-    if (start_menu_layout_.frame_envelope_snapshot == 0 &&
-        start_menu_layout_.frame_handle != 0) {
-        preserve_first_failure(accessor_.CreateStartMenuFrameEnvelope(
-            start_menu_layout_.frame_handle,
-            start_menu_layout_.frame_envelope_snapshot));
-    }
-
-    if (start_menu_layout_.panel_surface_snapshot == 0 &&
+    const bool has_surface_dependencies =
+        start_menu_layout_.frame_handle != 0 &&
         start_menu_layout_.main_menu_handle != 0 &&
         start_menu_layout_.acrylic_border_handle != 0 &&
-        start_menu_layout_.acrylic_overlay_handle != 0) {
-        preserve_first_failure(
-            accessor_.CreateStartMenuThreePanelSurface(
-                start_menu_layout_.main_menu_handle,
-                start_menu_layout_.acrylic_border_handle,
-                start_menu_layout_.acrylic_overlay_handle,
-                start_menu_layout_.panel_surface_snapshot));
-    } else if (start_menu_layout_.panel_surface_snapshot != 0) {
-        preserve_first_failure(
-            accessor_.UpdateStartMenuThreePanelSurface(
-                start_menu_layout_.panel_surface_snapshot));
+        start_menu_layout_.acrylic_overlay_handle != 0;
+    if (!has_surface_dependencies) {
+        if (start_menu_layout_.frame_envelope_snapshot != 0 ||
+            start_menu_layout_.panel_surface_snapshot != 0 ||
+            start_menu_layout_.scene_active) {
+            ReleaseStartMenuSceneSnapshots(true);
+        }
+        return S_OK;
+    }
+
+    bool surface_belongs_to_frame = false;
+    HRESULT result = accessor_.IsDescendantOf(
+        start_menu_layout_.main_menu_handle,
+        start_menu_layout_.frame_handle,
+        surface_belongs_to_frame);
+    if (FAILED(result)) {
+        ReleaseStartMenuSceneSnapshots(true);
+        return result;
+    }
+    if (!surface_belongs_to_frame) {
+        ReleaseStartMenuSceneSnapshots(true);
+        return S_OK;
+    }
+
+    if (start_menu_layout_.frame_envelope_snapshot == 0) {
+        result = accessor_.CreateStartMenuFrameEnvelope(
+            start_menu_layout_.frame_handle,
+            start_menu_layout_.frame_envelope_snapshot);
+        if (FAILED(result)) {
+            ReleaseStartMenuSceneSnapshots(true);
+            return result;
+        }
+    }
+
+    if (start_menu_layout_.panel_surface_snapshot == 0) {
+        result = accessor_.CreateStartMenuThreePanelSurface(
+            start_menu_layout_.main_menu_handle,
+            start_menu_layout_.acrylic_border_handle,
+            start_menu_layout_.acrylic_overlay_handle,
+            start_menu_layout_.panel_surface_snapshot);
+    } else {
+        result = accessor_.UpdateStartMenuThreePanelSurface(
+            start_menu_layout_.panel_surface_snapshot);
+    }
+    if (FAILED(result)) {
+        ReleaseStartMenuSceneSnapshots(true);
+        return result;
     }
 
     if (start_menu_layout_.recommended_snapshot == 0 &&
         start_menu_layout_.recommended_handle != 0 &&
-        start_menu_layout_.recommended_parent_handle != 0 &&
-        start_menu_layout_.main_menu_handle != 0) {
-        start_menu_layout_mutation_in_progress_ = true;
-        const HRESULT attach_result =
-            accessor_.AttachStartMenuRecommended(
+        start_menu_layout_.recommended_parent_handle != 0) {
+        bool recommendation_belongs_to_surface = false;
+        result = accessor_.IsDescendantOf(
+            start_menu_layout_.recommended_parent_handle,
+            start_menu_layout_.main_menu_handle,
+            recommendation_belongs_to_surface);
+        if (FAILED(result)) {
+            ReleaseStartMenuSceneSnapshots(true);
+            return result;
+        }
+        if (recommendation_belongs_to_surface) {
+            start_menu_layout_mutation_in_progress_ = true;
+            result = accessor_.AttachStartMenuRecommended(
                 start_menu_layout_.recommended_handle,
                 start_menu_layout_.recommended_parent_handle,
                 start_menu_layout_.main_menu_handle,
                 start_menu_layout_.recommended_snapshot);
-        start_menu_layout_mutation_in_progress_ = false;
-        preserve_first_failure(attach_result);
+            start_menu_layout_mutation_in_progress_ = false;
+            if (FAILED(result)) {
+                ReleaseStartMenuSceneSnapshots(true);
+                return result;
+            }
+        } else {
+            // The recommendation root belongs to a retired Start tree. Forget
+            // it so ordinary visual-tree traffic does not continuously retry
+            // the active scene; a new root will be observed independently.
+            start_menu_layout_.recommended_handle = 0;
+            start_menu_layout_.recommended_parent_handle = 0;
+        }
     }
 
-    if (start_menu_layout_.all_apps_snapshot == 0 &&
-        start_menu_layout_.panel_surface_snapshot != 0) {
+    if (start_menu_layout_.all_apps_snapshot == 0) {
         start_menu_layout_mutation_in_progress_ = true;
-        const HRESULT attach_result = accessor_.CreateStartMenuAllAppsPanel(
+        result = accessor_.CreateStartMenuAllAppsPanel(
             start_menu_layout_.panel_surface_snapshot,
             !start_menu_hide_all_apps_.load(std::memory_order_acquire),
             start_menu_layout_.all_apps_snapshot);
         start_menu_layout_mutation_in_progress_ = false;
-        preserve_first_failure(attach_result);
-    } else if (start_menu_layout_.all_apps_snapshot != 0) {
-        preserve_first_failure(accessor_.UpdateStartMenuAllAppsVisibility(
+    } else {
+        result = accessor_.UpdateStartMenuAllAppsVisibility(
             start_menu_layout_.all_apps_snapshot,
-            !start_menu_hide_all_apps_.load(std::memory_order_acquire)));
+            !start_menu_hide_all_apps_.load(std::memory_order_acquire));
     }
-    return first_failure;
+    if (FAILED(result)) {
+        ReleaseStartMenuSceneSnapshots(true);
+        return result;
+    }
+
+    const bool was_active = start_menu_layout_.scene_active;
+    start_menu_layout_.scene_active = true;
+    if (!was_active) {
+        for (auto& element : tracked_) {
+            if (element.handle == 0 ||
+                element.start_menu_layout_rule ==
+                    StartMenuLayoutRule::none) {
+                continue;
+            }
+            result = ApplyStartMenuLayout(element, true);
+            if (FAILED(result)) {
+                ReleaseStartMenuSceneSnapshots(true);
+                return result;
+            }
+        }
+    }
+    return S_OK;
 }
 
 void ShellXamlStyle::ForgetStartMenuLayoutHandle(
@@ -1203,32 +1382,26 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
         handle == start_menu_layout_.main_menu_handle ||
         handle == start_menu_layout_.recommended_handle ||
         handle == start_menu_layout_.recommended_parent_handle;
-    if (handle == start_menu_layout_.frame_handle &&
-        start_menu_layout_.frame_envelope_snapshot != 0) {
-        accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
-            start_menu_layout_.frame_envelope_snapshot);
-        start_menu_layout_.frame_envelope_snapshot = 0;
-    }
-    if (all_apps_dependency && start_menu_layout_.all_apps_snapshot != 0) {
+    const bool frame_dependency =
+        handle == start_menu_layout_.frame_handle;
+    if (frame_dependency || surface_dependency) {
+        ReleaseStartMenuSceneSnapshots(true);
+    } else if (all_apps_dependency &&
+               start_menu_layout_.all_apps_snapshot != 0) {
         start_menu_layout_mutation_in_progress_ = true;
         accessor_.ReleaseStartMenuAllAppsSnapshot(
             start_menu_layout_.all_apps_snapshot);
         start_menu_layout_mutation_in_progress_ = false;
         start_menu_layout_.all_apps_snapshot = 0;
     }
-    if (recommended_dependency &&
+    if (!frame_dependency && !surface_dependency &&
+        recommended_dependency &&
         start_menu_layout_.recommended_snapshot != 0) {
         start_menu_layout_mutation_in_progress_ = true;
         accessor_.ReleaseStartMenuRecommendedSnapshot(
             start_menu_layout_.recommended_snapshot);
         start_menu_layout_mutation_in_progress_ = false;
         start_menu_layout_.recommended_snapshot = 0;
-    }
-    if (surface_dependency &&
-        start_menu_layout_.panel_surface_snapshot != 0) {
-        accessor_.ReleaseStartMenuThreePanelSurfaceSnapshot(
-            start_menu_layout_.panel_surface_snapshot);
-        start_menu_layout_.panel_surface_snapshot = 0;
     }
     if (handle == start_menu_layout_.main_menu_handle) {
         start_menu_layout_.main_menu_handle = 0;
