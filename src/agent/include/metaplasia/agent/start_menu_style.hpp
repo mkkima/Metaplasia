@@ -420,11 +420,7 @@ private:
         std::wstring_view type_name,
         std::wstring_view element_name,
         std::uint64_t parent_handle) noexcept;
-    [[nodiscard]] bool StartMenuSceneNeedsRetry() const noexcept;
     [[nodiscard]] HRESULT RefreshStartMenuLayout() noexcept;
-    void ReleaseStartMenuSceneSnapshots(
-        bool release_frame_envelope) noexcept;
-    void ClearStartMenuLayoutRelations() noexcept;
     void ForgetStartMenuLayoutHandle(std::uint64_t handle) noexcept;
     [[nodiscard]] HRESULT EnsureTaskbarLayoutRoot(
         std::uint64_t handle) noexcept;

@@ -408,10 +408,6 @@ public:
         if (Find(frame_handle) == nullptr) {
             return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
         }
-        if (frame_envelope_failures_remaining != 0) {
-            --frame_envelope_failures_remaining;
-            return E_FAIL;
-        }
         auto* token = new (std::nothrow) std::uint8_t(1);
         if (token == nullptr) {
             return E_OUTOFMEMORY;
@@ -434,7 +430,6 @@ public:
 
     void ReleaseStartMenuFrameEnvelopeSnapshot(
         const std::uint64_t snapshot) noexcept override {
-        frame_envelope_active = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -483,7 +478,6 @@ public:
 
     void ReleaseStartMenuThreePanelSurfaceSnapshot(
         const std::uint64_t snapshot) noexcept override {
-        surface_active = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -520,7 +514,6 @@ public:
 
     void ReleaseStartMenuRecommendedSnapshot(
         const std::uint64_t snapshot) noexcept override {
-        recommended_attached = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -567,8 +560,6 @@ public:
 
     void ReleaseStartMenuAllAppsSnapshot(
         const std::uint64_t snapshot) noexcept override {
-        all_apps_attached = false;
-        all_apps_visible = false;
         delete reinterpret_cast<std::uint8_t*>(snapshot);
     }
 
@@ -581,7 +572,6 @@ public:
     std::size_t all_apps_writes{0};
     std::size_t recommended_writes{0};
     std::size_t frame_envelope_writes{0};
-    std::size_t frame_envelope_failures_remaining{0};
     std::uint64_t last_surface_main_menu{0};
     std::uint64_t last_surface_acrylic_border{0};
     std::uint64_t last_surface_acrylic_overlay{0};
@@ -916,12 +906,7 @@ int main() {
             L"Windows.UI.Xaml.Controls.Border",
             L"AcrylicOverlay",
             515) == S_OK,
-        "observe both native acrylic layers before the frame is ready");
-    Require(
-        !layout_accessor.surface_active &&
-            !layout_accessor.all_apps_attached &&
-            !layout_accessor.frame_envelope_active,
-        "do not construct a clipped three-panel scene without its envelope");
+        "create panel surfaces after both native acrylic layers exist");
     Require(
         layout_style.OnElementAdded(
             518,
@@ -940,38 +925,20 @@ int main() {
             520) == S_OK,
         "observe duplicate companion surfaces without selecting them");
     Require(
-        layout_style.OnElementAdded(
-            503,
-            L"Windows.UI.Xaml.Controls.Grid",
-            L"TopLevelHeader") == S_OK,
-        "track the shared three-column content host");
-    layout_accessor.frame_envelope_failures_remaining = 1;
-    Require(
-        FAILED(layout_style.OnElementAdded(
-            506,
-            L"StartMenu.StartBlendedFlexFrame")),
-        "surface a transient frame-envelope failure");
-    Require(
-        !layout_accessor.surface_active &&
-            !layout_accessor.frame_envelope_active,
-        "keep all panels detached after the failed envelope attempt");
-    Require(
-        layout_style.OnElementAdded(
-            504,
-            L"Windows.UI.Xaml.Controls.Grid",
-            L"UnrelatedVisual") == S_FALSE,
-        "retry the incomplete scene on the next visual-tree event");
-    Require(
-        layout_accessor.surface_active && layout_accessor.all_apps_attached &&
-            !layout_accessor.recommended_attached &&
-            layout_accessor.frame_envelope_active,
-        "create only the scene parts whose native dependencies exist");
-    Require(
         layout_accessor.last_surface_main_menu == 500 &&
             layout_accessor.last_surface_acrylic_border == 501 &&
             layout_accessor.last_surface_acrylic_overlay == 502,
         "bind the three-panel surface only to the MainMenu descendants");
     Require(
+        layout_style.OnElementAdded(
+            503,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"TopLevelHeader") == S_OK,
+        "track the shared three-column content host");
+    Require(
+        layout_style.OnElementAdded(
+            506,
+            L"StartMenu.StartBlendedFlexFrame") == S_OK &&
         layout_style.OnElementAdded(
             507,
             L"StartMenu.SearchBoxToggleButton",
@@ -1130,83 +1097,6 @@ int main() {
         layout_accessor.recommended_attached &&
         layout_accessor.frame_envelope_active,
         "recreate every three-panel resource after a live re-enable");
-    layout_style.OnElementRemoved(506);
-    Require(
-        !layout_accessor.surface_active && !layout_accessor.all_apps_attached &&
-            !layout_accessor.recommended_attached &&
-            !layout_accessor.frame_envelope_active,
-        "tear down the complete injected scene when Start recycles its root");
-    layout_accessor.Add(522);
-    Require(
-        layout_style.OnElementAdded(
-            522,
-            L"StartMenu.StartBlendedFlexFrame") == S_OK &&
-            !layout_accessor.surface_active &&
-            !layout_accessor.all_apps_attached &&
-            !layout_accessor.recommended_attached &&
-            layout_accessor.frame_envelope_active,
-        "wait for confirmed descendants after the recycled root returns");
-    const auto reobserve_native_start_descendants = [&]() noexcept {
-        return
-            layout_style.OnElementAdded(
-                500,
-                L"Windows.UI.Xaml.Controls.Grid",
-                L"MainMenu") == S_OK &&
-            layout_style.OnElementAdded(
-                501,
-                L"Windows.UI.Xaml.Controls.Border",
-                L"AcrylicBorder",
-                500) == S_OK &&
-            layout_style.OnElementAdded(
-                515,
-                L"Windows.UI.Xaml.Controls.Grid",
-                L"MainContent",
-                500) == S_FALSE &&
-            layout_style.OnElementAdded(
-                502,
-                L"Windows.UI.Xaml.Controls.Border",
-                L"AcrylicOverlay",
-                515) == S_OK &&
-            layout_style.OnElementAdded(
-                503,
-                L"Windows.UI.Xaml.Controls.Grid",
-                L"TopLevelHeader") == S_OK &&
-            layout_style.OnElementAdded(
-                511,
-                L"Windows.UI.Xaml.Controls.Grid",
-                L"TopLevelSuggestionsRoot",
-                503) == S_OK;
-    };
-    Require(
-        reobserve_native_start_descendants() &&
-            layout_accessor.surface_active &&
-            layout_accessor.all_apps_attached &&
-            layout_accessor.recommended_attached &&
-            layout_accessor.frame_envelope_active,
-        "rebind and rebuild the complete scene from the recycled tree");
-    layout_accessor.Add(523);
-    Require(
-        layout_style.OnElementAdded(
-            523,
-            L"StartMenu.StartBlendedFlexFrame") == S_OK &&
-            !layout_accessor.surface_active &&
-            !layout_accessor.all_apps_attached &&
-            !layout_accessor.recommended_attached &&
-            layout_accessor.frame_envelope_active,
-        "replace an overlapping old root without retaining its descendants");
-    Require(
-        reobserve_native_start_descendants() &&
-            layout_accessor.surface_active &&
-            layout_accessor.all_apps_attached &&
-            layout_accessor.recommended_attached &&
-            layout_accessor.frame_envelope_active,
-        "rebuild against the replacement root and confirmed descendants");
-    layout_style.OnElementRemoved(522);
-    Require(
-        layout_accessor.surface_active && layout_accessor.all_apps_attached &&
-            layout_accessor.recommended_attached &&
-            layout_accessor.frame_envelope_active,
-        "ignore the late removal of an already replaced Start root");
     Require(
         layout_style.Configure(
             false,

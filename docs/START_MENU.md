@@ -86,14 +86,6 @@ child index are captured before mutation. Disable restores those values in
 dependency order; a failed restoration keeps its snapshot so a later
 configuration pass can retry.
 
-The injected panels are committed only after the complete native clipping
-chain has been expanded. A transient failure while the recycled Start root is
-still attaching is retried on subsequent visual-tree events; no side panel is
-left outside an unexpanded native viewport. Removing the blended frame tears
-down All apps, Recommended, panel surfaces, and the frame envelope in dependency
-order. When Windows adds the recycled root again, the scene is rebuilt only from
-freshly observed native descendants instead of retaining a clipped partial menu.
-
 In Three-panel mode, **Hide All apps content** changes only the visibility of
 the injected list. The left panel and the full three-panel frame stay attached,
 so the setting can be changed live without restarting Start or changing the
