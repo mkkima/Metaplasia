@@ -441,7 +441,8 @@ HRESULT ShellXamlStyle::OnElementAdded(
                 return refresh_result;
             }
         }
-        if (start_menu_observe_result == S_OK) {
+        if (start_menu_observe_result == S_OK ||
+            StartMenuSceneNeedsRetry()) {
             const HRESULT refresh_result = RefreshStartMenuLayout();
             if (FAILED(refresh_result)) {
                 return refresh_result;
@@ -501,7 +502,9 @@ HRESULT ShellXamlStyle::OnElementAdded(
                 result = refresh_result;
             }
         }
-        if (SUCCEEDED(result) && start_menu_observe_result == S_OK) {
+        if (SUCCEEDED(result) &&
+            (start_menu_observe_result == S_OK ||
+             StartMenuSceneNeedsRetry())) {
             result = RefreshStartMenuLayout();
         }
         return result;
@@ -732,7 +735,9 @@ HRESULT ShellXamlStyle::OnElementAdded(
             write_result = refresh_result;
         }
     }
-    if (SUCCEEDED(write_result) && start_menu_observe_result == S_OK) {
+    if (SUCCEEDED(write_result) &&
+        (start_menu_observe_result == S_OK ||
+         StartMenuSceneNeedsRetry())) {
         write_result = RefreshStartMenuLayout();
     }
     return write_result;
@@ -1010,6 +1015,11 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
     };
     if (type_name == L"StartMenu.StartBlendedFlexFrame" &&
         element_name.empty()) {
+        if (start_menu_layout_.frame_handle != 0 &&
+            start_menu_layout_.frame_handle != handle) {
+            ReleaseStartMenuSceneSnapshots(true);
+            ClearStartMenuLayoutRelations();
+        }
         start_menu_layout_.frame_handle = handle;
         return S_OK;
     }
@@ -1137,6 +1147,13 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
             start_menu_layout_.frame_handle,
             start_menu_layout_.frame_envelope_snapshot));
     }
+    // Every injected panel extends beyond the native Start viewport. Never
+    // construct or retain a partial scene until the complete clipping chain
+    // has been expanded successfully. A later visual-tree event retries this
+    // operation when the recycled Start root is fully attached.
+    if (start_menu_layout_.frame_envelope_snapshot == 0) {
+        return first_failure;
+    }
 
     if (start_menu_layout_.panel_surface_snapshot == 0 &&
         start_menu_layout_.main_menu_handle != 0 &&
@@ -1152,6 +1169,9 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
         preserve_first_failure(
             accessor_.UpdateStartMenuThreePanelSurface(
                 start_menu_layout_.panel_surface_snapshot));
+    }
+    if (start_menu_layout_.panel_surface_snapshot == 0) {
+        return first_failure;
     }
 
     if (start_menu_layout_.recommended_snapshot == 0 &&
@@ -1186,6 +1206,65 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
     return first_failure;
 }
 
+bool ShellXamlStyle::StartMenuSceneNeedsRetry() const noexcept {
+    if (target_ != protocol::AgentTarget::start_menu ||
+        !enabled_.load(std::memory_order_acquire) ||
+        !start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire)) {
+        return false;
+    }
+    if (start_menu_layout_.frame_handle != 0 &&
+        start_menu_layout_.frame_envelope_snapshot == 0) {
+        return true;
+    }
+    return start_menu_layout_.frame_envelope_snapshot != 0 &&
+           start_menu_layout_.panel_surface_snapshot == 0 &&
+           start_menu_layout_.main_menu_handle != 0 &&
+           start_menu_layout_.acrylic_border_handle != 0 &&
+           start_menu_layout_.acrylic_overlay_handle != 0;
+}
+
+void ShellXamlStyle::ReleaseStartMenuSceneSnapshots(
+    const bool release_frame_envelope) noexcept {
+    start_menu_layout_mutation_in_progress_ = true;
+    if (start_menu_layout_.all_apps_snapshot != 0) {
+        accessor_.ReleaseStartMenuAllAppsSnapshot(
+            start_menu_layout_.all_apps_snapshot);
+        start_menu_layout_.all_apps_snapshot = 0;
+    }
+    if (start_menu_layout_.recommended_snapshot != 0) {
+        accessor_.ReleaseStartMenuRecommendedSnapshot(
+            start_menu_layout_.recommended_snapshot);
+        start_menu_layout_.recommended_snapshot = 0;
+    }
+    start_menu_layout_mutation_in_progress_ = false;
+    if (start_menu_layout_.panel_surface_snapshot != 0) {
+        accessor_.ReleaseStartMenuThreePanelSurfaceSnapshot(
+            start_menu_layout_.panel_surface_snapshot);
+        start_menu_layout_.panel_surface_snapshot = 0;
+    }
+    if (release_frame_envelope &&
+        start_menu_layout_.frame_envelope_snapshot != 0) {
+        accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
+            start_menu_layout_.frame_envelope_snapshot);
+        start_menu_layout_.frame_envelope_snapshot = 0;
+    }
+}
+
+void ShellXamlStyle::ClearStartMenuLayoutRelations() noexcept {
+    start_menu_layout_.frame_handle = 0;
+    start_menu_layout_.main_menu_handle = 0;
+    start_menu_layout_.acrylic_border_handle = 0;
+    start_menu_layout_.acrylic_overlay_handle = 0;
+    start_menu_layout_.main_content_handle = 0;
+    start_menu_layout_.top_level_header_handle = 0;
+    start_menu_layout_.recommended_handle = 0;
+    start_menu_layout_.recommended_parent_handle = 0;
+    start_menu_layout_.acrylic_border_candidates.fill({});
+    start_menu_layout_.acrylic_overlay_candidates.fill({});
+    start_menu_layout_.main_content_candidates.fill({});
+}
+
 void ShellXamlStyle::ForgetStartMenuLayoutHandle(
     const std::uint64_t handle) noexcept {
     if (handle == 0 || target_ != protocol::AgentTarget::start_menu) {
@@ -1203,32 +1282,29 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
         handle == start_menu_layout_.main_menu_handle ||
         handle == start_menu_layout_.recommended_handle ||
         handle == start_menu_layout_.recommended_parent_handle;
-    if (handle == start_menu_layout_.frame_handle &&
-        start_menu_layout_.frame_envelope_snapshot != 0) {
-        accessor_.ReleaseStartMenuFrameEnvelopeSnapshot(
-            start_menu_layout_.frame_envelope_snapshot);
-        start_menu_layout_.frame_envelope_snapshot = 0;
-    }
-    if (all_apps_dependency && start_menu_layout_.all_apps_snapshot != 0) {
+    const bool frame_dependency =
+        handle == start_menu_layout_.frame_handle;
+    if (frame_dependency) {
+        ReleaseStartMenuSceneSnapshots(true);
+        ClearStartMenuLayoutRelations();
+    } else if (surface_dependency) {
+        ReleaseStartMenuSceneSnapshots(false);
+    } else if (all_apps_dependency &&
+               start_menu_layout_.all_apps_snapshot != 0) {
         start_menu_layout_mutation_in_progress_ = true;
         accessor_.ReleaseStartMenuAllAppsSnapshot(
             start_menu_layout_.all_apps_snapshot);
         start_menu_layout_mutation_in_progress_ = false;
         start_menu_layout_.all_apps_snapshot = 0;
     }
-    if (recommended_dependency &&
+    if (!frame_dependency && !surface_dependency &&
+        recommended_dependency &&
         start_menu_layout_.recommended_snapshot != 0) {
         start_menu_layout_mutation_in_progress_ = true;
         accessor_.ReleaseStartMenuRecommendedSnapshot(
             start_menu_layout_.recommended_snapshot);
         start_menu_layout_mutation_in_progress_ = false;
         start_menu_layout_.recommended_snapshot = 0;
-    }
-    if (surface_dependency &&
-        start_menu_layout_.panel_surface_snapshot != 0) {
-        accessor_.ReleaseStartMenuThreePanelSurfaceSnapshot(
-            start_menu_layout_.panel_surface_snapshot);
-        start_menu_layout_.panel_surface_snapshot = 0;
     }
     if (handle == start_menu_layout_.main_menu_handle) {
         start_menu_layout_.main_menu_handle = 0;
