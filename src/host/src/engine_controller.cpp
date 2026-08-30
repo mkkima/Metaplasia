@@ -1,5 +1,7 @@
 #include "metaplasia/host/engine_controller.hpp"
 
+#include "metaplasia/host/reconciliation_policy.hpp"
+
 #include "metaplasia/base/utf.hpp"
 #include "metaplasia/platform/process.hpp"
 
@@ -1101,6 +1103,8 @@ void EngineController::ReconcileProcess(
     const std::uint32_t start_menu_background_color,
     const bool start_menu_three_panel_layout_enabled,
     const bool start_menu_hide_all_apps) {
+    const auto observed_now = std::chrono::steady_clock::now();
+    bool defer_start_menu_initialization = false;
     {
         std::lock_guard lock(mutex_);
         auto& state = ProcessStateLocked(slot, process_id);
@@ -1111,14 +1115,25 @@ void EngineController::ReconcileProcess(
             }
             state = {};
             state.process_id = process_id;
+            state.observed_at = observed_now;
         }
         state.running = process_id != 0;
         if (!state.running) {
             state.agent_loaded = false;
             state.operation_in_progress = false;
         }
+        defer_start_menu_initialization =
+            ShouldDeferStartMenuInitialization(
+                state.running,
+                slot == ProcessSlot::start_menu,
+                desired_features != protocol::agent_feature_none,
+                state.observed_at,
+                observed_now);
     }
     if (process_id == 0) {
+        return;
+    }
+    if (defer_start_menu_initialization) {
         return;
     }
 

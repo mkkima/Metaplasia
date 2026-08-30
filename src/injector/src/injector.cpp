@@ -71,6 +71,10 @@ Result<void> ValidateNoConflictingShellModules(
             return "tap-site-released";
         case Stage::tap_site_detached:
             return "tap-site-detached";
+        case Stage::wait_for_tap_site:
+            return "wait-for-tap-site";
+        case Stage::retry_xaml_diagnostics:
+            return "retry-xaml-diagnostics";
     }
     return "unknown";
 }
@@ -866,9 +870,25 @@ Result<InjectionResult> Injector::ConfigureInternal(
             configuration,
             timeout);
         if (start_menu_state.ok()) {
+            constexpr std::uint32_t service_present = 1U << 0U;
+            constexpr std::uint32_t watcher_present = 1U << 1U;
+            constexpr std::uint32_t advised = 1U << 2U;
+            constexpr std::uint32_t initialization_attempt_shift = 4U;
+            constexpr std::uint32_t initialization_attempt_mask = 0xFU;
+            const std::uint32_t state = start_menu_state.value();
             std::ostringstream formatted;
             formatted << " (state=0x" << std::hex << std::uppercase
-                      << start_menu_state.value() << ')';
+                      << state << std::dec
+                      << ", attempts="
+                      << ((state >> initialization_attempt_shift) &
+                          initialization_attempt_mask)
+                      << ", service="
+                      << ((state & service_present) != 0 ? "present" : "none")
+                      << ", watcher="
+                      << ((state & watcher_present) != 0 ? "present" : "none")
+                      << ", subscription="
+                      << ((state & advised) != 0 ? "active" : "inactive")
+                      << ')';
             state_detail = formatted.str();
         }
         return Status(

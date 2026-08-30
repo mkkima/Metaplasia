@@ -74,6 +74,8 @@ enum class AgentDiagnosticStage : std::uint32_t {
     lock_class_factory = 11,
     tap_site_released = 12,
     tap_site_detached = 13,
+    wait_for_tap_site = 14,
+    retry_xaml_diagnostics = 15,
 };
 
 // Fixed-size, versioned ABI copied to the target process by the injector.

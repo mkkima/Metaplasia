@@ -60,6 +60,7 @@ private:
         std::uint32_t configured_features{0};
         std::uint32_t configured_process_id{0};
         std::uint64_t configured_generation{0};
+        std::chrono::steady_clock::time_point observed_at{};
         std::chrono::steady_clock::time_point retry_after{};
         std::chrono::steady_clock::time_point last_error_logged_at{};
         std::string last_logged_error;

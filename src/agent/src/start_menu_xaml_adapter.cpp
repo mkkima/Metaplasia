@@ -1,6 +1,7 @@
 #include "metaplasia/agent/start_menu_xaml_adapter.hpp"
 
 #include "metaplasia/agent/start_menu_style.hpp"
+#include "metaplasia/agent/xaml_diagnostics_initialization.hpp"
 
 #include <Windows.h>
 #include <roapi.h>
@@ -98,7 +99,6 @@ using AsyncAction = ABI::Windows::Foundation::IAsyncAction;
 
 constexpr DWORD kDispatcherTimeoutMilliseconds = 2000;
 constexpr DWORD kVisualTreeSubscriptionTimeoutMilliseconds = 5000;
-constexpr wchar_t kVisualDiagnosticsEndpoint[] = L"VisualDiagConnection1";
 constexpr LONG kStartMenuAppIconSize = 22;
 constexpr std::size_t kStartMenuAppIconByteCount =
     static_cast<std::size_t>(kStartMenuAppIconSize) *
@@ -300,8 +300,8 @@ std::atomic<InitialSubscriptionState> g_initial_subscription_state{
     InitialSubscriptionState::idle};
 std::atomic<HRESULT> g_initial_subscription_result{E_UNEXPECTED};
 SRWLOCK g_initialization_lock = SRWLOCK_INIT;
-bool g_initialization_attempted = false;
-HRESULT g_initialization_result = E_UNEXPECTED;
+XamlDiagnosticsInitialization g_diagnostics_initialization;
+std::atomic<std::uint32_t> g_diagnostics_initialization_attempts{0};
 
 void DebugLog(const wchar_t* message) noexcept {
     ::OutputDebugStringW(L"[Metaplasia Shell XAML] ");
@@ -3545,7 +3545,33 @@ DWORD WINAPI InitialVisualTreeSubscriptionWorker(
             completion_event,
             kVisualTreeSubscriptionTimeoutMilliseconds);
         if (wait_result == WAIT_TIMEOUT) {
-            return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            const HRESULT timeout = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+            InitialSubscriptionState expected =
+                InitialSubscriptionState::waiting_for_site;
+            if (state == InitialSubscriptionState::waiting_for_site &&
+                g_initial_subscription_state.compare_exchange_strong(
+                    expected,
+                    InitialSubscriptionState::idle,
+                    std::memory_order_acq_rel)) {
+                g_initial_subscription_result.store(
+                    timeout,
+                    std::memory_order_release);
+                ::AcquireSRWLockExclusive(&g_initialization_lock);
+                const bool retry_allowed =
+                    g_desired_target.load(std::memory_order_acquire) ==
+                    protocol::AgentTarget::start_menu;
+                const bool retry_available =
+                    g_diagnostics_initialization.RecordSiteTimeout(
+                        retry_allowed);
+                ::ReleaseSRWLockExclusive(&g_initialization_lock);
+                g_diagnostic_stage.store(
+                    retry_available
+                        ? protocol::AgentDiagnosticStage::
+                              retry_xaml_diagnostics
+                        : protocol::AgentDiagnosticStage::wait_for_tap_site,
+                    std::memory_order_release);
+            }
+            return timeout;
         }
         if (wait_result != WAIT_OBJECT_0) {
             return HRESULT_FROM_WIN32(::GetLastError());
@@ -3844,21 +3870,11 @@ public:
 
 [[nodiscard]] HRESULT InitializeDiagnosticsAdapter() noexcept {
     ::AcquireSRWLockExclusive(&g_initialization_lock);
-    if (g_initialization_attempted) {
-        if (g_initialization_result ==
-                HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND) &&
-            ::GetModuleHandleW(L"Windows.UI.Xaml.dll") != nullptr) {
-            // The host can discover StartMenuExperienceHost before its XAML
-            // runtime finishes loading. Retrying is safe because the previous
-            // attempt never called InitializeXamlDiagnosticsEx.
-            g_initialization_attempted = false;
-        } else {
-            const HRESULT result = g_initialization_result;
-            ::ReleaseSRWLockExclusive(&g_initialization_lock);
-            return result;
-        }
+    if (g_diagnostics_initialization.reuse_result()) {
+        const HRESULT result = g_diagnostics_initialization.result();
+        ::ReleaseSRWLockExclusive(&g_initialization_lock);
+        return result;
     }
-    g_initialization_attempted = true;
 
     HRESULT result = E_UNEXPECTED;
     const HMODULE module = g_agent_module.load(std::memory_order_acquire);
@@ -3885,22 +3901,54 @@ public:
                     path_length == 0 ? ::GetLastError()
                                      : ERROR_INSUFFICIENT_BUFFER);
             } else {
-                const DWORD process_id = ::GetCurrentProcessId();
-                result = PrepareInitialVisualTreeSubscription();
-                if (SUCCEEDED(result)) {
-                    result = initialize(
-                        kVisualDiagnosticsEndpoint,
-                        process_id,
-                        nullptr,
-                        module_path.data(),
-                        kStartMenuTapClsid,
-                        nullptr);
+                const auto endpoint =
+                    g_diagnostics_initialization.BeginAttempt();
+                if (!endpoint.has_value()) {
+                    result = g_diagnostics_initialization.result();
+                } else {
+                    g_diagnostics_initialization_attempts.store(
+                        static_cast<std::uint32_t>(
+                            g_diagnostics_initialization.attempt_count()),
+                        std::memory_order_release);
+                    if (g_diagnostics_initialization.attempt_count() > 1) {
+                        g_diagnostic_stage.store(
+                            protocol::AgentDiagnosticStage::
+                                retry_xaml_diagnostics,
+                            std::memory_order_release);
+                    }
+                    const DWORD process_id = ::GetCurrentProcessId();
+                    result = PrepareInitialVisualTreeSubscription();
+                    if (SUCCEEDED(result)) {
+                        result = initialize(
+                            endpoint->data(),
+                            process_id,
+                            nullptr,
+                            module_path.data(),
+                            kStartMenuTapClsid,
+                            nullptr);
+                        g_diagnostics_initialization.RecordApiResult(
+                            result,
+                            g_desired_target.load(
+                                std::memory_order_acquire) ==
+                                protocol::AgentTarget::start_menu);
+                        if (SUCCEEDED(result) && !IsControllerAttached()) {
+                            g_diagnostic_stage.store(
+                                protocol::AgentDiagnosticStage::
+                                    wait_for_tap_site,
+                                std::memory_order_release);
+                        }
+                    } else {
+                        g_diagnostics_initialization.RecordApiResult(
+                            result,
+                            g_desired_target.load(
+                                std::memory_order_acquire) ==
+                                protocol::AgentTarget::start_menu);
+                    }
                 }
             }
         }
     }
 
-    g_initialization_result = result;
     ::ReleaseSRWLockExclusive(&g_initialization_lock);
     if (FAILED(result)) {
         DebugLog(L"XAML Diagnostics initialization failed closed");
@@ -3983,21 +4031,32 @@ protocol::AgentResult ConfigureShellXaml(
         !enabled);
     if (result == S_FALSE && enabled) {
         const HRESULT initialization_result = InitializeDiagnosticsAdapter();
-        const HRESULT subscription_result =
-            ConsumeInitialVisualTreeSubscription();
-        if (subscription_result != S_FALSE) {
-            result = subscription_result;
-            if (SUCCEEDED(result) && !IsControllerOperational()) {
-                result = E_NOINTERFACE;
-            }
-        } else if (IsControllerAttached()) {
-            result = ConfigureAttachedController(
-                target,
-                true,
-                settings,
-                false);
-        } else {
+        if (FAILED(initialization_result)) {
+            InitialSubscriptionState expected =
+                InitialSubscriptionState::waiting_for_site;
+            static_cast<void>(
+                g_initial_subscription_state.compare_exchange_strong(
+                    expected,
+                    InitialSubscriptionState::idle,
+                    std::memory_order_acq_rel));
             result = initialization_result;
+        } else {
+            const HRESULT subscription_result =
+                ConsumeInitialVisualTreeSubscription();
+            if (subscription_result != S_FALSE) {
+                result = subscription_result;
+                if (SUCCEEDED(result) && !IsControllerOperational()) {
+                    result = E_NOINTERFACE;
+                }
+            } else if (IsControllerAttached()) {
+                result = ConfigureAttachedController(
+                    target,
+                    true,
+                    settings,
+                    false);
+            } else {
+                result = initialization_result;
+            }
         }
     } else if (result == S_FALSE) {
         result = S_OK;
@@ -4039,6 +4098,8 @@ std::uint32_t StartMenuXamlControllerState() noexcept {
     constexpr std::uint32_t service_present = 1U << 0U;
     constexpr std::uint32_t watcher_present = 1U << 1U;
     constexpr std::uint32_t advised = 1U << 2U;
+    constexpr std::uint32_t initialization_attempt_shift = 4U;
+    constexpr std::uint32_t initialization_attempt_mask = 0xFU;
     constexpr std::uint32_t tracked_count_shift = 8U;
 
     ::AcquireSRWLockShared(&g_controller_lock);
@@ -4056,6 +4117,10 @@ std::uint32_t StartMenuXamlControllerState() noexcept {
         state |= advised;
     }
     ::ReleaseSRWLockShared(&g_controller_lock);
+    state |= (g_diagnostics_initialization_attempts.load(
+                  std::memory_order_acquire) &
+              initialization_attempt_mask)
+             << initialization_attempt_shift;
     return state;
 }
 

@@ -70,6 +70,23 @@ metaplasia_configure_target(metaplasia_diagnostic_log_tests)
 add_test(NAME diagnostic_log COMMAND metaplasia_diagnostic_log_tests)
 
 add_executable(
+    metaplasia_reconciliation_policy_tests
+        reconciliation_policy_tests.cpp
+)
+
+target_link_libraries(
+    metaplasia_reconciliation_policy_tests
+    PRIVATE
+        metaplasia_host_settings
+)
+
+metaplasia_configure_target(metaplasia_reconciliation_policy_tests)
+add_test(
+    NAME reconciliation_policy
+    COMMAND metaplasia_reconciliation_policy_tests
+)
+
+add_executable(
     metaplasia_watchdog_protocol_tests
         watchdog_protocol_tests.cpp
 )

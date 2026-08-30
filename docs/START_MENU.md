@@ -13,7 +13,8 @@ the first write and restored exactly when the color or target is disabled.
 The adapter runs only in `StartMenuExperienceHost.exe`. It requires an already
 loaded `Windows.UI.Xaml.dll` with the standard
 `InitializeXamlDiagnosticsEx` export and uses the
-`VisualDiagConnection1` endpoint. Its TAP object obtains
+bounded `VisualDiagConnection1` through `VisualDiagConnection4` endpoints.
+Its TAP object obtains
 `IXamlDiagnostics` and `IVisualTreeService3` through `IObjectWithSite` and
 subscribes an `IVisualTreeServiceCallback2`. The callback explicitly exposes
 both the derived and base callback IIDs required by the COM contract.
@@ -24,7 +25,11 @@ initializer. `SetSite` prepares the controller and starts
 `AdviseVisualTreeChange` on a dedicated worker, then returns immediately to
 avoid re-entering the XAML initializer. The configuration call waits at most
 five seconds for `service + watcher + advised`; a timeout never terminates the
-worker or releases objects it can still access.
+worker or releases objects it can still access. The host also gives a newly
+observed Start process five seconds to finish its own XAML startup before the
+first injection. If the diagnostics API accepts a connection but never creates
+the TAP site, the next reconciliation uses the next endpoint. Four failed
+endpoints are terminal for that process, preventing an unbounded retry loop.
 
 Only these exact visual type identities are currently approved:
 
@@ -53,7 +58,10 @@ XAML Diagnostics so an optional style cannot disrupt visual-tree enumeration.
 The shared tracker is bounded to 32 shell elements and refuses overflow before
 writing an element. Adapter failures include the native HRESULT, lifecycle
 stage, and a compact state word whose low bits report service, watcher, and
-subscription presence; tracked-element count occupies the next byte.
+subscription presence. Bits 4-7 report the bounded initialization-attempt
+count; tracked-element count begins at the next byte. The persistent host log
+also decodes these fields into readable `attempts`, `service`, `watcher`, and
+`subscription` values.
 
 Normal destruction of the temporary TAP activation object releases only its
 site reference. It does not masquerade as `SetSite(nullptr)` and cannot tear

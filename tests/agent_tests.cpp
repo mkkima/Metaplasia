@@ -1,5 +1,6 @@
 #include "metaplasia/protocol/agent_abi.hpp"
 #include "metaplasia/agent/start_menu_xaml_adapter.hpp"
+#include "metaplasia/agent/xaml_diagnostics_initialization.hpp"
 
 #include <Windows.h>
 #include <ocidl.h>
@@ -59,6 +60,54 @@ int wmain(const int argc, wchar_t** argv) {
     Require(argc == 2, "agent path argument");
     const std::filesystem::path agent_path(argv[1]);
     Require(agent_path.is_absolute(), "absolute agent path");
+
+    metaplasia::agent::XamlDiagnosticsInitialization diagnostics_retry;
+    const auto first_endpoint = diagnostics_retry.BeginAttempt();
+    Require(
+        first_endpoint == L"VisualDiagConnection1",
+        "start XAML diagnostics on the primary endpoint");
+    diagnostics_retry.RecordApiResult(S_OK, true);
+    Require(
+        diagnostics_retry.reuse_result() &&
+            diagnostics_retry.waiting_for_site(),
+        "cache a successful API call while waiting for the TAP site");
+    Require(
+        diagnostics_retry.RecordSiteTimeout(true) &&
+            !diagnostics_retry.reuse_result(),
+        "make a missing TAP site retryable on another endpoint");
+    const auto second_endpoint = diagnostics_retry.BeginAttempt();
+    Require(
+        second_endpoint == L"VisualDiagConnection2",
+        "advance a TAP-site timeout to the next endpoint");
+    diagnostics_retry.RecordApiResult(E_FAIL, true);
+    Require(
+        !diagnostics_retry.reuse_result(),
+        "retry a failed diagnostics API call while endpoints remain");
+    Require(
+        diagnostics_retry.BeginAttempt() == L"VisualDiagConnection3",
+        "use the third bounded diagnostics endpoint");
+    diagnostics_retry.RecordApiResult(E_FAIL, true);
+    Require(
+        diagnostics_retry.BeginAttempt() == L"VisualDiagConnection4",
+        "use the final bounded diagnostics endpoint");
+    diagnostics_retry.RecordApiResult(S_OK, true);
+    Require(
+        !diagnostics_retry.RecordSiteTimeout(true) &&
+            diagnostics_retry.reuse_result() &&
+            diagnostics_retry.result() ==
+                HRESULT_FROM_WIN32(ERROR_TIMEOUT) &&
+            !diagnostics_retry.BeginAttempt().has_value(),
+        "stop retrying after every safe diagnostics endpoint timed out");
+
+    metaplasia::agent::XamlDiagnosticsInitialization taskbar_initialization;
+    Require(
+        taskbar_initialization.BeginAttempt() == L"VisualDiagConnection1",
+        "keep Taskbar on its original diagnostics endpoint");
+    taskbar_initialization.RecordApiResult(E_FAIL, false);
+    Require(
+        taskbar_initialization.reuse_result() &&
+            !taskbar_initialization.BeginAttempt().has_value(),
+        "do not apply Start recovery endpoints to Taskbar");
 
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = &TestWindowProcedure;
