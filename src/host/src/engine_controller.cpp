@@ -136,6 +136,52 @@ std::string_view TargetName(const protocol::TargetId target) noexcept {
     }
 }
 
+std::string_view XamlStyleStateName(
+    const protocol::XamlStyleState state) noexcept {
+    switch (state) {
+        case protocol::XamlStyleState::inactive:
+            return "inactive";
+        case protocol::XamlStyleState::waiting_for_visual_tree:
+            return "waiting";
+        case protocol::XamlStyleState::applying:
+            return "applying";
+        case protocol::XamlStyleState::active:
+            return "active";
+        case protocol::XamlStyleState::failed:
+            return "failed";
+        default:
+            return "unknown";
+    }
+}
+
+std::string_view XamlStyleStageName(
+    const protocol::XamlStyleStage stage) noexcept {
+    switch (stage) {
+        case protocol::XamlStyleStage::none:
+            return "none";
+        case protocol::XamlStyleStage::observe_visual_tree:
+            return "observe-visual-tree";
+        case protocol::XamlStyleStage::verify_scene_relation:
+            return "verify-scene-relation";
+        case protocol::XamlStyleStage::create_frame_envelope:
+            return "create-frame-envelope";
+        case protocol::XamlStyleStage::create_panel_surface:
+            return "create-panel-surface";
+        case protocol::XamlStyleStage::attach_recommended:
+            return "attach-recommended";
+        case protocol::XamlStyleStage::create_all_apps:
+            return "create-all-apps";
+        case protocol::XamlStyleStage::apply_element_layout:
+            return "apply-element-layout";
+        case protocol::XamlStyleStage::apply_element_style:
+            return "apply-element-style";
+        case protocol::XamlStyleStage::rollback_scene:
+            return "rollback-scene";
+        default:
+            return "unknown";
+    }
+}
+
 std::string_view CustomizationTarget(
     const protocol::CustomizationId customization) noexcept {
     switch (customization) {
@@ -514,11 +560,79 @@ Result<protocol::XamlDiagnosticsResponse> EngineController::XamlDiagnostics(
         return snapshot.status();
     }
 
+    if (target == protocol::TargetId::start_menu) {
+        bool write_health_log = false;
+        {
+            std::lock_guard lock(mutex_);
+            const auto& value = snapshot.value();
+            write_health_log =
+                !start_menu_style_log_state_.initialized ||
+                start_menu_style_log_state_.process_id != process_id ||
+                start_menu_style_log_state_.state != value.style_state ||
+                start_menu_style_log_state_.stage != value.style_stage ||
+                start_menu_style_log_state_.dependencies !=
+                    value.scene_dependencies ||
+                start_menu_style_log_state_.native_error !=
+                    value.last_style_error ||
+                start_menu_style_log_state_.failure_count !=
+                    value.style_apply_failure_count;
+            if (write_health_log) {
+                start_menu_style_log_state_ = {
+                    process_id,
+                    value.style_state,
+                    value.style_stage,
+                    value.scene_dependencies,
+                    value.last_style_error,
+                    value.style_apply_success_count,
+                    value.style_apply_failure_count,
+                    true};
+            }
+        }
+        if (write_health_log) {
+            const auto& value = snapshot.value();
+            std::ostringstream detail;
+            detail << "state=" << XamlStyleStateName(value.style_state)
+                   << ", stage=" << XamlStyleStageName(value.style_stage)
+                   << ", native=0x" << std::hex << std::uppercase
+                   << value.last_style_error << std::dec
+                   << ", dependencies=0x" << std::hex << std::uppercase
+                   << value.scene_dependencies << std::dec
+                   << ", tracked=" << value.tracked_element_count
+                   << ", attempts=" << value.style_apply_attempt_count
+                   << ", successes=" << value.style_apply_success_count
+                   << ", failures=" << value.style_apply_failure_count;
+            diagnostic_log_.Write(
+                value.style_state == protocol::XamlStyleState::failed
+                    ? DiagnosticLevel::error
+                    : DiagnosticLevel::info,
+                "xaml-style",
+                value.style_state == protocol::XamlStyleState::failed
+                    ? "apply-failed"
+                    : value.style_state == protocol::XamlStyleState::active
+                    ? "apply-succeeded"
+                    : "apply-state",
+                "start-menu",
+                process_id,
+                detail.str());
+        }
+    }
+
     protocol::XamlDiagnosticsResponse response;
     response.target = target;
     response.dropped_type_count = snapshot.value().dropped_type_count;
     response.dropped_element_count = snapshot.value().dropped_element_count;
     response.tracked_element_count = snapshot.value().tracked_element_count;
+    response.style_state = snapshot.value().style_state;
+    response.style_stage = snapshot.value().style_stage;
+    response.scene_dependencies = snapshot.value().scene_dependencies;
+    response.last_style_error = snapshot.value().last_style_error;
+    response.style_apply_attempt_count =
+        snapshot.value().style_apply_attempt_count;
+    response.style_apply_success_count =
+        snapshot.value().style_apply_success_count;
+    response.style_apply_failure_count =
+        snapshot.value().style_apply_failure_count;
+    response.style_status_sequence = snapshot.value().style_status_sequence;
     response.types.reserve(snapshot.value().type_count);
     for (std::uint32_t index = 0;
          index < snapshot.value().type_count;

@@ -1416,7 +1416,10 @@ async function refreshXamlDiagnostics(silent = false) {
   elements.xamlSectionTitle.textContent = `${label} XAML observations`;
   try {
     const diagnostics = await invoke("get_xaml_diagnostics", { target: runtime.xamlTarget });
-    elements.xamlSummary.textContent = `${diagnostics.trackedElementCount} tracked · ${diagnostics.droppedTypeCount} dropped types · ${diagnostics.droppedElementCount} dropped elements`;
+    const health = runtime.xamlTarget === "start"
+      ? ` · style ${diagnostics.styleState} · stage ${diagnostics.styleStage} · dependencies 0x${diagnostics.sceneDependencies.toString(16).padStart(2, "0").toUpperCase()} · attempts ${diagnostics.styleApplyAttemptCount} · successes ${diagnostics.styleApplySuccessCount} · failures ${diagnostics.styleApplyFailureCount}${diagnostics.lastStyleError ? ` · HRESULT 0x${diagnostics.lastStyleError.toString(16).padStart(8, "0").toUpperCase()}` : ""}`
+      : "";
+    elements.xamlSummary.textContent = `${diagnostics.trackedElementCount} tracked${health} · ${diagnostics.droppedTypeCount} dropped types · ${diagnostics.droppedElementCount} dropped elements`;
     elements.xamlTypes.replaceChildren();
     if (!diagnostics.types.length) {
       const row = document.createElement("tr");

@@ -554,7 +554,23 @@ Result<TargetId> DecodeXamlDiagnosticsRequest(
 
 Result<std::vector<std::byte>> EncodeXamlDiagnosticsResponse(
     const XamlDiagnosticsResponse& response) {
+    constexpr std::uint16_t known_scene_dependencies =
+        xaml_scene_dependency_all |
+        xaml_scene_dependency_recommended;
+    const bool valid_style_state =
+        response.style_state >= XamlStyleState::inactive &&
+        response.style_state <= XamlStyleState::failed;
+    const bool valid_style_stage =
+        response.style_stage >= XamlStyleStage::none &&
+        response.style_stage <= XamlStyleStage::rollback_scene;
     if (!IsValidTarget(response.target) ||
+        !valid_style_state || !valid_style_stage ||
+        (response.scene_dependencies & ~known_scene_dependencies) != 0 ||
+        (response.style_state == XamlStyleState::active &&
+         response.style_apply_success_count == 0) ||
+        (response.style_state == XamlStyleState::failed &&
+         (response.last_style_error == 0 ||
+          response.style_apply_failure_count == 0)) ||
         response.types.size() > kMaximumXamlDiagnosticTypes ||
         response.elements.size() > kMaximumXamlDiagnosticElements) {
         return Status(ErrorCode::invalid_argument, "Invalid XAML diagnostics");
@@ -564,6 +580,14 @@ Result<std::vector<std::byte>> EncodeXamlDiagnosticsResponse(
     writer.Write(response.dropped_type_count);
     writer.Write(response.dropped_element_count);
     writer.Write(response.tracked_element_count);
+    writer.Write(response.style_state);
+    writer.Write(response.style_stage);
+    writer.Write(response.scene_dependencies);
+    writer.Write(response.last_style_error);
+    writer.Write(response.style_apply_attempt_count);
+    writer.Write(response.style_apply_success_count);
+    writer.Write(response.style_apply_failure_count);
+    writer.Write(response.style_status_sequence);
     writer.Write(static_cast<std::uint16_t>(response.types.size()));
     for (const auto& type : response.types) {
         if (type.observation_count == 0 ||
@@ -612,11 +636,33 @@ Result<XamlDiagnosticsResponse> DecodeXamlDiagnosticsResponse(
     Reader reader(payload);
     XamlDiagnosticsResponse response;
     std::uint16_t count = 0;
+    constexpr std::uint16_t known_scene_dependencies =
+        xaml_scene_dependency_all |
+        xaml_scene_dependency_recommended;
     if (!reader.Read(response.target) ||
         !reader.Read(response.dropped_type_count) ||
         !reader.Read(response.dropped_element_count) ||
-        !reader.Read(response.tracked_element_count) || !reader.Read(count) ||
+        !reader.Read(response.tracked_element_count) ||
+        !reader.Read(response.style_state) ||
+        !reader.Read(response.style_stage) ||
+        !reader.Read(response.scene_dependencies) ||
+        !reader.Read(response.last_style_error) ||
+        !reader.Read(response.style_apply_attempt_count) ||
+        !reader.Read(response.style_apply_success_count) ||
+        !reader.Read(response.style_apply_failure_count) ||
+        !reader.Read(response.style_status_sequence) ||
+        !reader.Read(count) ||
         !IsValidTarget(response.target) ||
+        response.style_state < XamlStyleState::inactive ||
+        response.style_state > XamlStyleState::failed ||
+        response.style_stage < XamlStyleStage::none ||
+        response.style_stage > XamlStyleStage::rollback_scene ||
+        (response.scene_dependencies & ~known_scene_dependencies) != 0 ||
+        (response.style_state == XamlStyleState::active &&
+         response.style_apply_success_count == 0) ||
+        (response.style_state == XamlStyleState::failed &&
+         (response.last_style_error == 0 ||
+          response.style_apply_failure_count == 0)) ||
         count > kMaximumXamlDiagnosticTypes) {
         return InvalidPayload("XAML diagnostics response");
     }

@@ -462,6 +462,17 @@ public:
             Find(acrylic_overlay_handle) == nullptr) {
             return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
         }
+        if (reentrant_style != nullptr && !reentrant_surface_callback_fired) {
+            reentrant_surface_callback_fired = true;
+            const HRESULT callback_result = reentrant_style->OnElementAdded(
+                0xF000,
+                L"Windows.UI.Xaml.Controls.Grid",
+                L"GeneratedPanelChild",
+                main_menu_handle);
+            if (FAILED(callback_result)) {
+                return callback_result;
+            }
+        }
         auto* token = new (std::nothrow) std::uint8_t(1);
         if (token == nullptr) {
             return E_OUTOFMEMORY;
@@ -597,6 +608,8 @@ public:
     std::size_t recommended_writes{0};
     std::size_t frame_envelope_writes{0};
     std::size_t frame_envelope_failures_remaining{0};
+    metaplasia::agent::ShellXamlStyle* reentrant_style{nullptr};
+    bool reentrant_surface_callback_fired{false};
     std::uint64_t last_surface_main_menu{0};
     std::uint64_t last_surface_acrylic_border{0};
     std::uint64_t last_surface_acrylic_overlay{0};
@@ -963,6 +976,7 @@ int main() {
             L"TopLevelHeader") == S_OK,
         "track the shared three-column content host");
     layout_accessor.frame_envelope_failures_remaining = 1;
+    layout_accessor.reentrant_style = &layout_style;
     Require(
         FAILED(layout_style.OnElementAdded(
             506,
@@ -975,6 +989,19 @@ int main() {
             !layout_accessor.Find(506)->layout_active &&
             !layout_accessor.Find(500)->layout_active,
         "roll back every three-panel mutation after an incomplete frame");
+    metaplasia::protocol::XamlDiagnosticsSnapshot failed_health;
+    layout_style.CopyRuntimeDiagnostics(failed_health);
+    Require(
+        failed_health.style_state ==
+                metaplasia::protocol::XamlStyleState::failed &&
+            failed_health.style_stage ==
+                metaplasia::protocol::XamlStyleStage::
+                    create_frame_envelope &&
+            FAILED(static_cast<HRESULT>(failed_health.last_style_error)) &&
+            failed_health.style_apply_attempt_count == 1 &&
+            failed_health.style_apply_success_count == 0 &&
+            failed_health.style_apply_failure_count == 1,
+        "publish the exact failed Start scene stage and native result");
     Require(
         layout_style.OnElementAdded(
             504,
@@ -983,8 +1010,25 @@ int main() {
             layout_accessor.frame_envelope_active &&
             layout_accessor.surface_active &&
             layout_accessor.all_apps_attached &&
-            !layout_accessor.recommended_attached,
-        "retry atomically and allow an empty Recommended panel");
+            !layout_accessor.recommended_attached &&
+            layout_accessor.reentrant_surface_callback_fired &&
+            layout_accessor.surface_writes == 1,
+        "retry atomically, suppress a reentrant generated-child callback, "
+        "and allow an empty Recommended panel");
+    metaplasia::protocol::XamlDiagnosticsSnapshot active_health;
+    layout_style.CopyRuntimeDiagnostics(active_health);
+    Require(
+        active_health.style_state ==
+                metaplasia::protocol::XamlStyleState::active &&
+            active_health.style_stage ==
+                metaplasia::protocol::XamlStyleStage::none &&
+            active_health.last_style_error == 0 &&
+            active_health.style_apply_attempt_count == 2 &&
+            active_health.style_apply_success_count == 1 &&
+            active_health.style_apply_failure_count == 1 &&
+            active_health.scene_dependencies ==
+                metaplasia::protocol::xaml_scene_dependency_all,
+        "publish verified Start scene activation after bounded recovery");
     Require(
         layout_accessor.last_surface_main_menu == 500 &&
             layout_accessor.last_surface_acrylic_border == 501 &&

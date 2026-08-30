@@ -354,6 +354,8 @@ public:
     [[nodiscard]] HRESULT ApplyDesiredToTrackedElements() noexcept;
 
     [[nodiscard]] std::size_t tracked_count() const noexcept;
+    void CopyRuntimeDiagnostics(
+        protocol::XamlDiagnosticsSnapshot& snapshot) const noexcept;
 
 private:
     struct TrackedElement final {
@@ -427,6 +429,16 @@ private:
         std::uint64_t parent_handle) noexcept;
     [[nodiscard]] bool StartMenuSceneNeedsRetry() const noexcept;
     [[nodiscard]] HRESULT RefreshStartMenuLayout() noexcept;
+    [[nodiscard]] std::uint16_t StartMenuSceneDependencies() const noexcept;
+    void PublishStartMenuSceneDependencies() noexcept;
+    void SetStartMenuStyleStatus(
+        protocol::XamlStyleState state,
+        protocol::XamlStyleStage stage,
+        HRESULT error) noexcept;
+    void RecordStartMenuStyleFailure(
+        protocol::XamlStyleStage stage,
+        HRESULT error) noexcept;
+    void RecordStartMenuStyleSuccess() noexcept;
     void ReleaseStartMenuSceneSnapshots(
         bool release_frame_envelope) noexcept;
     void ForgetStartMenuLayoutHandle(std::uint64_t handle) noexcept;
@@ -476,6 +488,17 @@ private:
     std::atomic<bool> start_menu_three_panel_layout_enabled_{false};
     std::atomic<bool> start_menu_hide_all_apps_{false};
     std::atomic<std::size_t> tracked_count_{0};
+    std::atomic<protocol::XamlStyleState> style_state_{
+        protocol::XamlStyleState::inactive};
+    std::atomic<protocol::XamlStyleStage> style_stage_{
+        protocol::XamlStyleStage::none};
+    std::atomic<std::uint32_t> last_style_error_{S_OK};
+    std::atomic<std::uint32_t> style_apply_attempt_count_{0};
+    std::atomic<std::uint32_t> style_apply_success_count_{0};
+    std::atomic<std::uint32_t> style_apply_failure_count_{0};
+    std::atomic<std::uint32_t> style_status_sequence_{0};
+    std::atomic<std::uint16_t> scene_dependencies_{
+        protocol::xaml_scene_dependency_none};
     std::array<TrackedElement, kMaximumTrackedShellXamlElements> tracked_{};
     std::array<TaskbarLayoutRelation, kMaximumTrackedTaskbarLayouts>
         taskbar_layouts_{};

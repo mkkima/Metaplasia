@@ -58,6 +58,16 @@ not inject an agent or change configuration. A snapshot is available only when
 the exact Metaplasia agent is already loaded in the corresponding process.
 Type, element, and dropped-observation counts are bounded by the native ABI.
 
+Start menu snapshots also expose the actual asynchronous style state rather
+than treating successful DLL configuration as successful styling. `waiting`
+means the required visual-tree dependencies have not all appeared, `applying`
+identifies an in-progress scene commit, `active` is published only after the
+complete style or three-panel scene has committed, and `failed` includes the
+exact apply stage and HRESULT. Dependency, attempt, success, and failure
+counters are included in both the UI summary and `metaplasia-cli xaml-types`.
+State transitions and new failures are persisted as `xaml-style` host events;
+unchanged health polls are deduplicated.
+
 The structured log records host lifecycle, watchdog failures, settings changes,
 configuration success or failure, and crash-loop safe mode. Identical rapid
 configuration failures are rate-limited in the log and repeated at most once

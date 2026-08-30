@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 const FRAME_MAGIC: u32 = 0x504D_544D;
-const PROTOCOL_VERSION: u16 = 9;
+const PROTOCOL_VERSION: u16 = 10;
 const HEADER_SIZE: usize = 16;
 const MAX_PAYLOAD_SIZE: usize = 64 * 1024;
 const ACKNOWLEDGEMENT: u8 = 0xA5;
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn portable_update_shutdown_message_is_versioned() {
-        assert_eq!(PROTOCOL_VERSION, 9);
+        assert_eq!(PROTOCOL_VERSION, 10);
         assert_eq!(
             MessageKind::try_from(6).unwrap(),
             MessageKind::PrepareUpdateRequest

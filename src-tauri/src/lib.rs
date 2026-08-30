@@ -175,6 +175,14 @@ struct XamlDiagnostics {
     dropped_type_count: u32,
     dropped_element_count: u32,
     tracked_element_count: u32,
+    style_state: String,
+    style_stage: String,
+    scene_dependencies: u16,
+    last_style_error: u32,
+    style_apply_attempt_count: u32,
+    style_apply_success_count: u32,
+    style_apply_failure_count: u32,
+    style_status_sequence: u32,
     types: Vec<XamlTypeObservation>,
     elements: Vec<XamlElementObservation>,
 }
@@ -328,7 +336,7 @@ fn try_query_app_state() -> Result<AppState, String> {
         .map_err(|error| error.to_string())?;
     expect_kind(&snapshot_frame, MessageKind::SnapshotResponse)
         .map_err(|error| error.to_string())?;
-    let targets = parse_snapshots(&snapshot_frame.payload)?;
+    let mut targets = parse_snapshots(&snapshot_frame.payload)?;
 
     let settings_frame = client
         .transact(MessageKind::GetSettingsRequest, &[], PIPE_TIMEOUT)
@@ -336,6 +344,33 @@ fn try_query_app_state() -> Result<AppState, String> {
     expect_kind(&settings_frame, MessageKind::SettingsResponse)
         .map_err(|error| error.to_string())?;
     let settings = with_start_app_list_policy(parse_settings(&settings_frame.payload)?);
+
+    let should_query_start_health = settings.start_menu_enabled
+        && targets.iter().any(|target| {
+            target.id == "start"
+                && target.agent_loaded
+                && target.process_running
+                && target.state != "incompatible"
+        });
+    if should_query_start_health {
+        let start_health = client
+            .transact(MessageKind::GetXamlDiagnosticsRequest, &[3], PIPE_TIMEOUT)
+            .map_err(|error| error.to_string())
+            .and_then(parse_xaml_diagnostics);
+        if let Some(start) = targets.iter_mut().find(|target| target.id == "start")
+            && start.agent_loaded
+            && start.process_running
+            && start.state != "incompatible"
+        {
+            match start_health {
+                Ok(health) => apply_start_menu_health(start, &settings, &health),
+                Err(error) => {
+                    start.state = "error".into();
+                    start.detail = format!("Start menu health check failed: {error}");
+                }
+            }
+        }
+    }
 
     Ok(AppState {
         connected: true,
@@ -442,6 +477,22 @@ fn parse_xaml_diagnostics(frame: protocol::Frame) -> Result<XamlDiagnostics, Str
     let dropped_type_count = reader.u32().map_err(|error| error.to_string())?;
     let dropped_element_count = reader.u32().map_err(|error| error.to_string())?;
     let tracked_element_count = reader.u32().map_err(|error| error.to_string())?;
+    let style_state = xaml_style_state_name(reader.u8().map_err(|error| error.to_string())?)?;
+    let style_stage = xaml_style_stage_name(reader.u8().map_err(|error| error.to_string())?)?;
+    let scene_dependencies = reader.u16().map_err(|error| error.to_string())?;
+    if scene_dependencies & !0x3F != 0 {
+        return Err("Host returned unknown Start menu scene dependencies".into());
+    }
+    let last_style_error = reader.u32().map_err(|error| error.to_string())?;
+    let style_apply_attempt_count = reader.u32().map_err(|error| error.to_string())?;
+    let style_apply_success_count = reader.u32().map_err(|error| error.to_string())?;
+    let style_apply_failure_count = reader.u32().map_err(|error| error.to_string())?;
+    let style_status_sequence = reader.u32().map_err(|error| error.to_string())?;
+    if (style_state == "active" && style_apply_success_count == 0)
+        || (style_state == "failed" && (last_style_error == 0 || style_apply_failure_count == 0))
+    {
+        return Err("Host returned an inconsistent XAML style state".into());
+    }
     let type_count = reader.u16().map_err(|error| error.to_string())?;
     if type_count > 64 {
         return Err("Host returned too many XAML diagnostic types".into());
@@ -473,9 +524,95 @@ fn parse_xaml_diagnostics(frame: protocol::Frame) -> Result<XamlDiagnostics, Str
         dropped_type_count,
         dropped_element_count,
         tracked_element_count,
+        style_state: style_state.into(),
+        style_stage: style_stage.into(),
+        scene_dependencies,
+        last_style_error,
+        style_apply_attempt_count,
+        style_apply_success_count,
+        style_apply_failure_count,
+        style_status_sequence,
         types,
         elements,
     })
+}
+
+fn xaml_style_state_name(state: u8) -> Result<&'static str, String> {
+    match state {
+        0 => Ok("inactive"),
+        1 => Ok("waiting"),
+        2 => Ok("applying"),
+        3 => Ok("active"),
+        4 => Ok("failed"),
+        _ => Err("Host returned an unknown XAML style state".into()),
+    }
+}
+
+fn xaml_style_stage_name(stage: u8) -> Result<&'static str, String> {
+    match stage {
+        0 => Ok("none"),
+        1 => Ok("observe-visual-tree"),
+        2 => Ok("verify-scene-relation"),
+        3 => Ok("create-frame-envelope"),
+        4 => Ok("create-panel-surface"),
+        5 => Ok("attach-recommended"),
+        6 => Ok("create-all-apps"),
+        7 => Ok("apply-element-layout"),
+        8 => Ok("apply-element-style"),
+        9 => Ok("rollback-scene"),
+        _ => Err("Host returned an unknown XAML style stage".into()),
+    }
+}
+
+fn apply_start_menu_health(
+    target: &mut TargetSnapshot,
+    settings: &Settings,
+    health: &XamlDiagnostics,
+) {
+    let diagnostics = format!(
+        "tracked={}, dependencies=0x{:02X}, attempts={}, successes={}, failures={}",
+        health.tracked_element_count,
+        health.scene_dependencies,
+        health.style_apply_attempt_count,
+        health.style_apply_success_count,
+        health.style_apply_failure_count
+    );
+    match health.style_state.as_str() {
+        "active" => {
+            target.state = "active".into();
+            target.detail = if settings.start_menu_three_panel_layout_enabled {
+                format!("Three-panel Start scene is applied; {diagnostics}")
+            } else {
+                format!("Start menu styles are applied; {diagnostics}")
+            };
+        }
+        "waiting" => {
+            target.state = "injecting".into();
+            target.detail = format!(
+                "Agent is attached and waiting for the Start visual tree; {}; stage={}",
+                diagnostics, health.style_stage
+            );
+        }
+        "applying" => {
+            target.state = "injecting".into();
+            target.detail = format!(
+                "Start menu style is being applied; {}; stage={}",
+                diagnostics, health.style_stage
+            );
+        }
+        "failed" => {
+            target.state = "error".into();
+            target.detail = format!(
+                "Start menu style failed after injection; native=0x{:08X}, stage={}, {}",
+                health.last_style_error, health.style_stage, diagnostics
+            );
+        }
+        _ => {
+            target.state = "error".into();
+            target.detail =
+                format!("Start menu agent is loaded but styling is inactive; {diagnostics}");
+        }
+    }
 }
 
 fn encode_customization(request: CustomizationRequest) -> Result<Vec<u8>, String> {
@@ -1194,5 +1331,86 @@ mod tests {
         })
         .unwrap();
         assert_eq!(payload, vec![19, 1]);
+    }
+
+    #[test]
+    fn start_menu_health_rejects_false_active_status() {
+        let mut target = TargetSnapshot {
+            id: "start".into(),
+            name: "Start menu".into(),
+            state: "active".into(),
+            enabled: true,
+            process_running: true,
+            agent_loaded: true,
+            process_id: 42,
+            detail: "configuration accepted".into(),
+        };
+        let settings = Settings {
+            start_menu_enabled: true,
+            start_menu_three_panel_layout_enabled: true,
+            ..Settings::default()
+        };
+        let health = XamlDiagnostics {
+            dropped_type_count: 0,
+            dropped_element_count: 0,
+            tracked_element_count: 17,
+            style_state: "failed".into(),
+            style_stage: "create-panel-surface".into(),
+            scene_dependencies: 0x1F,
+            last_style_error: 0x8000_4005,
+            style_apply_attempt_count: 2,
+            style_apply_success_count: 0,
+            style_apply_failure_count: 2,
+            style_status_sequence: 7,
+            types: Vec::new(),
+            elements: Vec::new(),
+        };
+
+        apply_start_menu_health(&mut target, &settings, &health);
+
+        assert_eq!(target.state, "error");
+        assert!(target.detail.contains("native=0x80004005"));
+        assert!(target.detail.contains("stage=create-panel-surface"));
+        assert!(target.detail.contains("tracked=17"));
+    }
+
+    #[test]
+    fn start_menu_health_reports_only_verified_scene_as_active() {
+        let mut target = TargetSnapshot {
+            id: "start".into(),
+            name: "Start menu".into(),
+            state: "injecting".into(),
+            enabled: true,
+            process_running: true,
+            agent_loaded: true,
+            process_id: 42,
+            detail: String::new(),
+        };
+        let settings = Settings {
+            start_menu_enabled: true,
+            start_menu_three_panel_layout_enabled: true,
+            ..Settings::default()
+        };
+        let health = XamlDiagnostics {
+            dropped_type_count: 0,
+            dropped_element_count: 0,
+            tracked_element_count: 17,
+            style_state: "active".into(),
+            style_stage: "none".into(),
+            scene_dependencies: 0x1F,
+            last_style_error: 0,
+            style_apply_attempt_count: 2,
+            style_apply_success_count: 1,
+            style_apply_failure_count: 1,
+            style_status_sequence: 8,
+            types: Vec::new(),
+            elements: Vec::new(),
+        };
+
+        apply_start_menu_health(&mut target, &settings, &health);
+
+        assert_eq!(target.state, "active");
+        assert!(target.detail.contains("Three-panel Start scene is applied"));
+        assert!(target.detail.contains("successes=1"));
     }
 }

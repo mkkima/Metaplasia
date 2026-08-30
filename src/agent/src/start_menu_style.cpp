@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace metaplasia::agent {
 namespace {
@@ -11,6 +12,34 @@ constexpr std::array<std::wstring_view, 3> kSupportedRootTypes{
     L"StartMenu.StartInnerFrame",
     L"StartMenu.StartBlendedFlexFrame",
 };
+
+class ScopedBooleanFlag final {
+public:
+    explicit ScopedBooleanFlag(bool& flag) noexcept
+        : flag_(flag), previous_(flag) {
+        flag_ = true;
+    }
+
+    ~ScopedBooleanFlag() { flag_ = previous_; }
+
+    ScopedBooleanFlag(const ScopedBooleanFlag&) = delete;
+    ScopedBooleanFlag& operator=(const ScopedBooleanFlag&) = delete;
+
+private:
+    bool& flag_;
+    bool previous_{false};
+};
+
+void SaturatingIncrement(std::atomic<std::uint32_t>& value) noexcept {
+    std::uint32_t current = value.load(std::memory_order_acquire);
+    while (current != (std::numeric_limits<std::uint32_t>::max)() &&
+           !value.compare_exchange_weak(
+               current,
+               current + 1U,
+               std::memory_order_acq_rel,
+               std::memory_order_acquire)) {
+    }
+}
 
 [[nodiscard]] bool IsTaskbarFrame(
     const std::wstring_view type_name,
@@ -379,6 +408,16 @@ bool ShellXamlStyle::Configure(
         start_menu_hide_all_apps,
         std::memory_order_release);
     enabled_.store(enabled, std::memory_order_release);
+    if (target_ == protocol::AgentTarget::start_menu) {
+        SetStartMenuStyleStatus(
+            enabled
+                ? protocol::XamlStyleState::waiting_for_visual_tree
+                : protocol::XamlStyleState::inactive,
+            enabled
+                ? protocol::XamlStyleStage::observe_visual_tree
+                : protocol::XamlStyleStage::none,
+            S_OK);
+    }
     return true;
 }
 
@@ -506,6 +545,15 @@ HRESULT ShellXamlStyle::OnElementAdded(
             (start_menu_observe_result == S_OK ||
              StartMenuSceneNeedsRetry())) {
             result = RefreshStartMenuLayout();
+        }
+        if (SUCCEEDED(result) &&
+            target_ == protocol::AgentTarget::start_menu &&
+            !start_menu_three_panel_layout_enabled_.load(
+                std::memory_order_acquire) &&
+            (existing->owns_opacity ||
+             existing->visibility_rule != ShellVisibilityRule::none ||
+             existing->background_rule != ShellBackgroundRule::none)) {
+            RecordStartMenuStyleSuccess();
         }
         return result;
     }
@@ -740,6 +788,21 @@ HRESULT ShellXamlStyle::OnElementAdded(
          StartMenuSceneNeedsRetry())) {
         write_result = RefreshStartMenuLayout();
     }
+    if (SUCCEEDED(write_result) &&
+        target_ == protocol::AgentTarget::start_menu &&
+        !start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire) &&
+        (owns_opacity || visibility_rule != ShellVisibilityRule::none ||
+         background_rule != ShellBackgroundRule::none)) {
+        RecordStartMenuStyleSuccess();
+    } else if (FAILED(write_result) &&
+               target_ == protocol::AgentTarget::start_menu &&
+               style_state_.load(std::memory_order_acquire) !=
+                   protocol::XamlStyleState::failed) {
+        RecordStartMenuStyleFailure(
+            protocol::XamlStyleStage::apply_element_style,
+            write_result);
+    }
     return write_result;
 }
 
@@ -835,6 +898,19 @@ HRESULT ShellXamlStyle::ApplyDesiredToTrackedElements() noexcept {
     if (!enabled && tracked_count_.load(std::memory_order_acquire) == 0) {
         taskbar_layouts_.fill({});
         start_menu_layout_ = {};
+    }
+    if (target_ == protocol::AgentTarget::start_menu) {
+        if (FAILED(first_failure) &&
+            style_state_.load(std::memory_order_acquire) !=
+                protocol::XamlStyleState::failed) {
+            RecordStartMenuStyleFailure(
+                protocol::XamlStyleStage::apply_element_style,
+                first_failure);
+        } else if (SUCCEEDED(first_failure) && enabled &&
+                   !three_panel_enabled &&
+                   tracked_count_.load(std::memory_order_acquire) != 0) {
+            RecordStartMenuStyleSuccess();
+        }
     }
     return first_failure;
 }
@@ -1049,6 +1125,7 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
             ReleaseStartMenuSceneSnapshots(true);
         }
         start_menu_layout_.frame_handle = handle;
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
@@ -1059,6 +1136,7 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
         }
         start_menu_layout_.main_menu_handle = handle;
         resolve_main_surface();
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Border" &&
@@ -1068,6 +1146,7 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
             handle,
             parent_handle);
         resolve_main_surface();
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Border" &&
@@ -1077,6 +1156,7 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
             handle,
             parent_handle);
         resolve_main_surface();
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
@@ -1086,11 +1166,13 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
             handle,
             parent_handle);
         resolve_main_surface();
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
         element_name == L"TopLevelHeader") {
         start_menu_layout_.top_level_header_handle = handle;
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
@@ -1109,6 +1191,7 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
         }
         start_menu_layout_.recommended_handle = handle;
         start_menu_layout_.recommended_parent_handle = parent_handle;
+        PublishStartMenuSceneDependencies();
         return S_OK;
     }
     return S_FALSE;
@@ -1131,6 +1214,72 @@ bool ShellXamlStyle::StartMenuSceneNeedsRetry() const noexcept {
            (start_menu_layout_.recommended_handle != 0 &&
             start_menu_layout_.recommended_parent_handle != 0 &&
             start_menu_layout_.recommended_snapshot == 0);
+}
+
+std::uint16_t ShellXamlStyle::StartMenuSceneDependencies() const noexcept {
+    std::uint16_t dependencies = protocol::xaml_scene_dependency_none;
+    if (start_menu_layout_.frame_handle != 0) {
+        dependencies |= protocol::xaml_scene_dependency_frame;
+    }
+    if (start_menu_layout_.main_menu_handle != 0) {
+        dependencies |= protocol::xaml_scene_dependency_main_menu;
+    }
+    if (start_menu_layout_.acrylic_border_handle != 0) {
+        dependencies |= protocol::xaml_scene_dependency_acrylic_border;
+    }
+    if (start_menu_layout_.acrylic_overlay_handle != 0) {
+        dependencies |= protocol::xaml_scene_dependency_acrylic_overlay;
+    }
+    if (start_menu_layout_.main_content_handle != 0) {
+        dependencies |= protocol::xaml_scene_dependency_main_content;
+    }
+    if (start_menu_layout_.recommended_handle != 0 &&
+        start_menu_layout_.recommended_parent_handle != 0) {
+        dependencies |= protocol::xaml_scene_dependency_recommended;
+    }
+    return dependencies;
+}
+
+void ShellXamlStyle::PublishStartMenuSceneDependencies() noexcept {
+    scene_dependencies_.store(
+        StartMenuSceneDependencies(),
+        std::memory_order_release);
+}
+
+void ShellXamlStyle::SetStartMenuStyleStatus(
+    const protocol::XamlStyleState state,
+    const protocol::XamlStyleStage stage,
+    const HRESULT error) noexcept {
+    const auto native_error = static_cast<std::uint32_t>(error);
+    const bool state_changed =
+        style_state_.exchange(state, std::memory_order_acq_rel) != state;
+    const bool stage_changed =
+        style_stage_.exchange(stage, std::memory_order_acq_rel) != stage;
+    const bool error_changed =
+        last_style_error_.exchange(native_error, std::memory_order_acq_rel) !=
+        native_error;
+    const bool changed = state_changed || stage_changed || error_changed;
+    if (changed) {
+        SaturatingIncrement(style_status_sequence_);
+    }
+}
+
+void ShellXamlStyle::RecordStartMenuStyleFailure(
+    const protocol::XamlStyleStage stage,
+    const HRESULT error) noexcept {
+    SaturatingIncrement(style_apply_failure_count_);
+    SetStartMenuStyleStatus(
+        protocol::XamlStyleState::failed,
+        stage,
+        FAILED(error) ? error : E_UNEXPECTED);
+}
+
+void ShellXamlStyle::RecordStartMenuStyleSuccess() noexcept {
+    SaturatingIncrement(style_apply_success_count_);
+    SetStartMenuStyleStatus(
+        protocol::XamlStyleState::active,
+        protocol::XamlStyleStage::none,
+        S_OK);
 }
 
 void ShellXamlStyle::ReleaseStartMenuSceneSnapshots(
@@ -1254,8 +1403,20 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
             start_menu_layout_.scene_active) {
             ReleaseStartMenuSceneSnapshots(true);
         }
+        SetStartMenuStyleStatus(
+            protocol::XamlStyleState::waiting_for_visual_tree,
+            protocol::XamlStyleStage::observe_visual_tree,
+            S_OK);
         return S_OK;
     }
+
+    SaturatingIncrement(style_apply_attempt_count_);
+    SetStartMenuStyleStatus(
+        protocol::XamlStyleState::applying,
+        protocol::XamlStyleStage::verify_scene_relation,
+        S_OK);
+    ScopedBooleanFlag mutation_guard(
+        start_menu_layout_mutation_in_progress_);
 
     bool surface_belongs_to_frame = false;
     HRESULT result = accessor_.IsDescendantOf(
@@ -1264,23 +1425,41 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
         surface_belongs_to_frame);
     if (FAILED(result)) {
         ReleaseStartMenuSceneSnapshots(true);
+        RecordStartMenuStyleFailure(
+            protocol::XamlStyleStage::verify_scene_relation,
+            result);
         return result;
     }
     if (!surface_belongs_to_frame) {
         ReleaseStartMenuSceneSnapshots(true);
+        SetStartMenuStyleStatus(
+            protocol::XamlStyleState::waiting_for_visual_tree,
+            protocol::XamlStyleStage::verify_scene_relation,
+            S_OK);
         return S_OK;
     }
 
     if (start_menu_layout_.frame_envelope_snapshot == 0) {
+        SetStartMenuStyleStatus(
+            protocol::XamlStyleState::applying,
+            protocol::XamlStyleStage::create_frame_envelope,
+            S_OK);
         result = accessor_.CreateStartMenuFrameEnvelope(
             start_menu_layout_.frame_handle,
             start_menu_layout_.frame_envelope_snapshot);
         if (FAILED(result)) {
             ReleaseStartMenuSceneSnapshots(true);
+            RecordStartMenuStyleFailure(
+                protocol::XamlStyleStage::create_frame_envelope,
+                result);
             return result;
         }
     }
 
+    SetStartMenuStyleStatus(
+        protocol::XamlStyleState::applying,
+        protocol::XamlStyleStage::create_panel_surface,
+        S_OK);
     if (start_menu_layout_.panel_surface_snapshot == 0) {
         result = accessor_.CreateStartMenuThreePanelSurface(
             start_menu_layout_.main_menu_handle,
@@ -1293,6 +1472,9 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
     }
     if (FAILED(result)) {
         ReleaseStartMenuSceneSnapshots(true);
+        RecordStartMenuStyleFailure(
+            protocol::XamlStyleStage::create_panel_surface,
+            result);
         return result;
     }
 
@@ -1306,18 +1488,26 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
             recommendation_belongs_to_surface);
         if (FAILED(result)) {
             ReleaseStartMenuSceneSnapshots(true);
+            RecordStartMenuStyleFailure(
+                protocol::XamlStyleStage::verify_scene_relation,
+                result);
             return result;
         }
         if (recommendation_belongs_to_surface) {
-            start_menu_layout_mutation_in_progress_ = true;
+            SetStartMenuStyleStatus(
+                protocol::XamlStyleState::applying,
+                protocol::XamlStyleStage::attach_recommended,
+                S_OK);
             result = accessor_.AttachStartMenuRecommended(
                 start_menu_layout_.recommended_handle,
                 start_menu_layout_.recommended_parent_handle,
                 start_menu_layout_.main_menu_handle,
                 start_menu_layout_.recommended_snapshot);
-            start_menu_layout_mutation_in_progress_ = false;
             if (FAILED(result)) {
                 ReleaseStartMenuSceneSnapshots(true);
+                RecordStartMenuStyleFailure(
+                    protocol::XamlStyleStage::attach_recommended,
+                    result);
                 return result;
             }
         } else {
@@ -1329,13 +1519,15 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
         }
     }
 
+    SetStartMenuStyleStatus(
+        protocol::XamlStyleState::applying,
+        protocol::XamlStyleStage::create_all_apps,
+        S_OK);
     if (start_menu_layout_.all_apps_snapshot == 0) {
-        start_menu_layout_mutation_in_progress_ = true;
         result = accessor_.CreateStartMenuAllAppsPanel(
             start_menu_layout_.panel_surface_snapshot,
             !start_menu_hide_all_apps_.load(std::memory_order_acquire),
             start_menu_layout_.all_apps_snapshot);
-        start_menu_layout_mutation_in_progress_ = false;
     } else {
         result = accessor_.UpdateStartMenuAllAppsVisibility(
             start_menu_layout_.all_apps_snapshot,
@@ -1343,12 +1535,19 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
     }
     if (FAILED(result)) {
         ReleaseStartMenuSceneSnapshots(true);
+        RecordStartMenuStyleFailure(
+            protocol::XamlStyleStage::create_all_apps,
+            result);
         return result;
     }
 
     const bool was_active = start_menu_layout_.scene_active;
     start_menu_layout_.scene_active = true;
     if (!was_active) {
+        SetStartMenuStyleStatus(
+            protocol::XamlStyleState::applying,
+            protocol::XamlStyleStage::apply_element_layout,
+            S_OK);
         for (auto& element : tracked_) {
             if (element.handle == 0 ||
                 element.start_menu_layout_rule ==
@@ -1358,10 +1557,14 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
             result = ApplyStartMenuLayout(element, true);
             if (FAILED(result)) {
                 ReleaseStartMenuSceneSnapshots(true);
+                RecordStartMenuStyleFailure(
+                    protocol::XamlStyleStage::apply_element_layout,
+                    result);
                 return result;
             }
         }
     }
+    RecordStartMenuStyleSuccess();
     return S_OK;
 }
 
@@ -1388,19 +1591,19 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
         ReleaseStartMenuSceneSnapshots(true);
     } else if (all_apps_dependency &&
                start_menu_layout_.all_apps_snapshot != 0) {
-        start_menu_layout_mutation_in_progress_ = true;
+        ScopedBooleanFlag mutation_guard(
+            start_menu_layout_mutation_in_progress_);
         accessor_.ReleaseStartMenuAllAppsSnapshot(
             start_menu_layout_.all_apps_snapshot);
-        start_menu_layout_mutation_in_progress_ = false;
         start_menu_layout_.all_apps_snapshot = 0;
     }
     if (!frame_dependency && !surface_dependency &&
         recommended_dependency &&
         start_menu_layout_.recommended_snapshot != 0) {
-        start_menu_layout_mutation_in_progress_ = true;
+        ScopedBooleanFlag mutation_guard(
+            start_menu_layout_mutation_in_progress_);
         accessor_.ReleaseStartMenuRecommendedSnapshot(
             start_menu_layout_.recommended_snapshot);
-        start_menu_layout_mutation_in_progress_ = false;
         start_menu_layout_.recommended_snapshot = 0;
     }
     if (handle == start_menu_layout_.main_menu_handle) {
@@ -1437,6 +1640,17 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
     }
     if (handle == start_menu_layout_.recommended_parent_handle) {
         start_menu_layout_.recommended_parent_handle = 0;
+    }
+    PublishStartMenuSceneDependencies();
+    if (enabled_.load(std::memory_order_acquire) &&
+        start_menu_three_panel_layout_enabled_.load(
+            std::memory_order_acquire) &&
+        style_state_.load(std::memory_order_acquire) !=
+            protocol::XamlStyleState::failed) {
+        SetStartMenuStyleStatus(
+            protocol::XamlStyleState::waiting_for_visual_tree,
+            protocol::XamlStyleStage::observe_visual_tree,
+            S_OK);
     }
 }
 
@@ -1761,6 +1975,24 @@ void ShellXamlStyle::ForgetTaskbarLayoutHandle(
 
 std::size_t ShellXamlStyle::tracked_count() const noexcept {
     return tracked_count_.load(std::memory_order_acquire);
+}
+
+void ShellXamlStyle::CopyRuntimeDiagnostics(
+    protocol::XamlDiagnosticsSnapshot& snapshot) const noexcept {
+    snapshot.style_state = style_state_.load(std::memory_order_acquire);
+    snapshot.style_stage = style_stage_.load(std::memory_order_acquire);
+    snapshot.scene_dependencies =
+        scene_dependencies_.load(std::memory_order_acquire);
+    snapshot.last_style_error =
+        last_style_error_.load(std::memory_order_acquire);
+    snapshot.style_apply_attempt_count =
+        style_apply_attempt_count_.load(std::memory_order_acquire);
+    snapshot.style_apply_success_count =
+        style_apply_success_count_.load(std::memory_order_acquire);
+    snapshot.style_apply_failure_count =
+        style_apply_failure_count_.load(std::memory_order_acquire);
+    snapshot.style_status_sequence =
+        style_status_sequence_.load(std::memory_order_acquire);
 }
 
 double ShellXamlStyle::DesiredOpacity() const noexcept {

@@ -20,7 +20,7 @@ void Require(const bool condition, const char* message) {
 int main() {
     using namespace metaplasia::protocol;
 
-    static_assert(kProtocolVersion == 9);
+    static_assert(kProtocolVersion == 10);
     const FrameHeader prepare_update_header{
         MessageKind::prepare_update_request,
         7,
@@ -304,6 +304,13 @@ int main() {
     diagnostics.dropped_type_count = 2;
     diagnostics.dropped_element_count = 1;
     diagnostics.tracked_element_count = 1;
+    diagnostics.style_state = XamlStyleState::active;
+    diagnostics.style_stage = XamlStyleStage::none;
+    diagnostics.scene_dependencies = xaml_scene_dependency_all;
+    diagnostics.style_apply_attempt_count = 2;
+    diagnostics.style_apply_success_count = 1;
+    diagnostics.style_apply_failure_count = 1;
+    diagnostics.style_status_sequence = 4;
     diagnostics.types = {
         {"StartDocked.StartSizingFrame", 3},
         {"Windows.UI.Xaml.Controls.Grid", 12}};
@@ -325,6 +332,27 @@ int main() {
     Require(
         decoded_diagnostics.value().tracked_element_count == 1,
         "diagnostics tracked root roundtrip");
+    Require(
+        decoded_diagnostics.value().style_state == XamlStyleState::active &&
+            decoded_diagnostics.value().scene_dependencies ==
+                xaml_scene_dependency_all &&
+            decoded_diagnostics.value().style_apply_attempt_count == 2 &&
+            decoded_diagnostics.value().style_apply_success_count == 1 &&
+            decoded_diagnostics.value().style_apply_failure_count == 1 &&
+            decoded_diagnostics.value().style_status_sequence == 4,
+        "diagnostics style health roundtrip");
+    XamlDiagnosticsResponse invalid_active_health = diagnostics;
+    invalid_active_health.style_apply_success_count = 0;
+    Require(
+        !EncodeXamlDiagnosticsResponse(invalid_active_health).ok(),
+        "reject an unverified active XAML style state");
+    XamlDiagnosticsResponse invalid_failed_health = diagnostics;
+    invalid_failed_health.style_state = XamlStyleState::failed;
+    invalid_failed_health.style_stage = XamlStyleStage::create_panel_surface;
+    invalid_failed_health.last_style_error = 0;
+    Require(
+        !EncodeXamlDiagnosticsResponse(invalid_failed_health).ok(),
+        "reject a failed XAML style state without a native error");
 
     const std::array<TargetSnapshot, 3> snapshots{
         TargetSnapshot{

@@ -2953,6 +2953,7 @@ public:
         copy.dropped_element_count = dropped_diagnostic_element_count_;
         copy.tracked_element_count = static_cast<std::uint32_t>(
             style_.tracked_count());
+        style_.CopyRuntimeDiagnostics(copy);
         std::copy_n(
             diagnostic_types_.begin(),
             diagnostic_type_count_,

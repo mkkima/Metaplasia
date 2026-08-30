@@ -434,10 +434,23 @@ Result<protocol::XamlDiagnosticsSnapshot> InvokeXamlDiagnosticsExport(
             "ReadProcessMemory(XAML diagnostics)",
             ::GetLastError());
     }
+    constexpr std::uint16_t known_scene_dependencies =
+        protocol::xaml_scene_dependency_all |
+        protocol::xaml_scene_dependency_recommended;
     if (snapshot.magic != protocol::kXamlDiagnosticsMagic ||
         snapshot.version != protocol::kXamlDiagnosticsVersion ||
         snapshot.size != sizeof(snapshot) || snapshot.target != target ||
-        snapshot.reserved != 0 || snapshot.reserved_state != 0 ||
+        snapshot.reserved != 0 ||
+        snapshot.style_state < protocol::XamlStyleState::inactive ||
+        snapshot.style_state > protocol::XamlStyleState::failed ||
+        snapshot.style_stage < protocol::XamlStyleStage::none ||
+        snapshot.style_stage > protocol::XamlStyleStage::rollback_scene ||
+        (snapshot.scene_dependencies & ~known_scene_dependencies) != 0 ||
+        (snapshot.style_state == protocol::XamlStyleState::active &&
+         snapshot.style_apply_success_count == 0) ||
+        (snapshot.style_state == protocol::XamlStyleState::failed &&
+         (snapshot.last_style_error == 0 ||
+          snapshot.style_apply_failure_count == 0)) ||
         snapshot.type_count > protocol::kMaximumXamlDiagnosticTypes ||
         snapshot.element_count > protocol::kMaximumXamlDiagnosticElements) {
         return Status(

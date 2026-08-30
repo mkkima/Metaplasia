@@ -12,7 +12,7 @@
 namespace metaplasia::protocol {
 
 inline constexpr std::uint32_t kFrameMagic = 0x504D544D;  // "MTMP"
-inline constexpr std::uint16_t kProtocolVersion = 9;
+inline constexpr std::uint16_t kProtocolVersion = 10;
 inline constexpr std::size_t kFrameHeaderSize = 16;
 inline constexpr std::uint32_t kMaximumPayloadSize = 64U * 1024U;
 
@@ -138,6 +138,14 @@ struct XamlDiagnosticsResponse final {
     std::uint32_t dropped_type_count{0};
     std::uint32_t dropped_element_count{0};
     std::uint32_t tracked_element_count{0};
+    XamlStyleState style_state{XamlStyleState::inactive};
+    XamlStyleStage style_stage{XamlStyleStage::none};
+    std::uint16_t scene_dependencies{xaml_scene_dependency_none};
+    std::uint32_t last_style_error{0};
+    std::uint32_t style_apply_attempt_count{0};
+    std::uint32_t style_apply_success_count{0};
+    std::uint32_t style_apply_failure_count{0};
+    std::uint32_t style_status_sequence{0};
     std::vector<XamlTypeObservation> types;
     std::vector<XamlElementObservation> elements;
 };

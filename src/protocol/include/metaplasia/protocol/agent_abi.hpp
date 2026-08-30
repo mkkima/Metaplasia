@@ -128,11 +128,48 @@ inline constexpr char kAgentGetXamlDiagnosticsExport[] =
 
 inline constexpr std::uint32_t kXamlDiagnosticsMagic =
     0x4458504D;  // "MPXD"
-inline constexpr std::uint16_t kXamlDiagnosticsVersion = 1;
+inline constexpr std::uint16_t kXamlDiagnosticsVersion = 2;
 inline constexpr std::size_t kMaximumXamlDiagnosticTypes = 64;
 inline constexpr std::size_t kMaximumXamlDiagnosticTypeNameLength = 127;
 inline constexpr std::size_t kMaximumXamlDiagnosticElements = 128;
 inline constexpr std::size_t kMaximumXamlDiagnosticElementNameLength = 63;
+
+enum class XamlStyleState : std::uint8_t {
+    inactive = 0,
+    waiting_for_visual_tree,
+    applying,
+    active,
+    failed,
+};
+
+enum class XamlStyleStage : std::uint8_t {
+    none = 0,
+    observe_visual_tree,
+    verify_scene_relation,
+    create_frame_envelope,
+    create_panel_surface,
+    attach_recommended,
+    create_all_apps,
+    apply_element_layout,
+    apply_element_style,
+    rollback_scene,
+};
+
+enum XamlSceneDependency : std::uint16_t {
+    xaml_scene_dependency_none = 0,
+    xaml_scene_dependency_frame = 1U << 0U,
+    xaml_scene_dependency_main_menu = 1U << 1U,
+    xaml_scene_dependency_acrylic_border = 1U << 2U,
+    xaml_scene_dependency_acrylic_overlay = 1U << 3U,
+    xaml_scene_dependency_main_content = 1U << 4U,
+    xaml_scene_dependency_recommended = 1U << 5U,
+    xaml_scene_dependency_all =
+        xaml_scene_dependency_frame |
+        xaml_scene_dependency_main_menu |
+        xaml_scene_dependency_acrylic_border |
+        xaml_scene_dependency_acrylic_overlay |
+        xaml_scene_dependency_main_content,
+};
 
 struct XamlTypeDiagnostic final {
     wchar_t type_name[kMaximumXamlDiagnosticTypeNameLength + 1]{};
@@ -160,7 +197,14 @@ struct XamlDiagnosticsSnapshot final {
     std::uint32_t element_count{0};
     std::uint32_t dropped_element_count{0};
     std::uint32_t tracked_element_count{0};
-    std::uint32_t reserved_state{0};
+    XamlStyleState style_state{XamlStyleState::inactive};
+    XamlStyleStage style_stage{XamlStyleStage::none};
+    std::uint16_t scene_dependencies{xaml_scene_dependency_none};
+    std::uint32_t last_style_error{0};
+    std::uint32_t style_apply_attempt_count{0};
+    std::uint32_t style_apply_success_count{0};
+    std::uint32_t style_apply_failure_count{0};
+    std::uint32_t style_status_sequence{0};
     XamlTypeDiagnostic types[kMaximumXamlDiagnosticTypes]{};
     XamlElementDiagnostic elements[kMaximumXamlDiagnosticElements]{};
 };

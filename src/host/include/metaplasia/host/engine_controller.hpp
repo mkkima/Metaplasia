@@ -77,6 +77,17 @@ private:
         std::string detail;
     };
 
+    struct StartMenuStyleLogState final {
+        std::uint32_t process_id{0};
+        protocol::XamlStyleState state{protocol::XamlStyleState::inactive};
+        protocol::XamlStyleStage stage{protocol::XamlStyleStage::none};
+        std::uint16_t dependencies{protocol::xaml_scene_dependency_none};
+        std::uint32_t native_error{0};
+        std::uint32_t success_count{0};
+        std::uint32_t failure_count{0};
+        bool initialized{false};
+    };
+
     enum class ProcessSlot : std::uint8_t {
         explorer_shell,
         explorer_auxiliary,
@@ -161,6 +172,7 @@ private:
     std::string start_menu_guard_detail_;
     std::uint64_t explorer_configuration_generation_{1};
     std::uint64_t start_menu_configuration_generation_{1};
+    mutable StartMenuStyleLogState start_menu_style_log_state_{};
     bool wake_requested_{false};
     std::jthread monitor_thread_;
     std::jthread explorer_window_event_thread_;

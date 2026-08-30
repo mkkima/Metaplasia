@@ -26,6 +26,8 @@ namespace {
 using metaplasia::protocol::MessageKind;
 using metaplasia::protocol::RuntimeState;
 using metaplasia::protocol::TargetId;
+using metaplasia::protocol::XamlStyleStage;
+using metaplasia::protocol::XamlStyleState;
 
 const char* TargetName(const TargetId target) noexcept {
     switch (target) {
@@ -56,6 +58,50 @@ const char* StateName(const RuntimeState state) noexcept {
             return "error";
         case RuntimeState::incompatible:
             return "incompatible";
+        default:
+            return "unknown";
+    }
+}
+
+const char* XamlStyleStateName(const XamlStyleState state) noexcept {
+    switch (state) {
+        case XamlStyleState::inactive:
+            return "inactive";
+        case XamlStyleState::waiting_for_visual_tree:
+            return "waiting";
+        case XamlStyleState::applying:
+            return "applying";
+        case XamlStyleState::active:
+            return "active";
+        case XamlStyleState::failed:
+            return "failed";
+        default:
+            return "unknown";
+    }
+}
+
+const char* XamlStyleStageName(const XamlStyleStage stage) noexcept {
+    switch (stage) {
+        case XamlStyleStage::none:
+            return "none";
+        case XamlStyleStage::observe_visual_tree:
+            return "observe-visual-tree";
+        case XamlStyleStage::verify_scene_relation:
+            return "verify-scene-relation";
+        case XamlStyleStage::create_frame_envelope:
+            return "create-frame-envelope";
+        case XamlStyleStage::create_panel_surface:
+            return "create-panel-surface";
+        case XamlStyleStage::attach_recommended:
+            return "attach-recommended";
+        case XamlStyleStage::create_all_apps:
+            return "create-all-apps";
+        case XamlStyleStage::apply_element_layout:
+            return "apply-element-layout";
+        case XamlStyleStage::apply_element_style:
+            return "apply-element-style";
+        case XamlStyleStage::rollback_scene:
+            return "rollback-scene";
         default:
             return "unknown";
     }
@@ -700,7 +746,22 @@ int wmain(const int argc, wchar_t** argv) {
                   << ", dropped-elements="
                   << diagnostics.value().dropped_element_count
                   << ", styled-elements="
-                  << diagnostics.value().tracked_element_count << '\n';
+                  << diagnostics.value().tracked_element_count
+                  << ", style-state="
+                  << XamlStyleStateName(diagnostics.value().style_state)
+                  << ", style-stage="
+                  << XamlStyleStageName(diagnostics.value().style_stage)
+                  << ", dependencies=0x" << std::hex << std::uppercase
+                  << diagnostics.value().scene_dependencies
+                  << ", native=0x" << std::setw(8) << std::setfill('0')
+                  << diagnostics.value().last_style_error << std::dec
+                  << std::nouppercase << std::setfill(' ')
+                  << ", attempts="
+                  << diagnostics.value().style_apply_attempt_count
+                  << ", successes="
+                  << diagnostics.value().style_apply_success_count
+                  << ", failures="
+                  << diagnostics.value().style_apply_failure_count << '\n';
         for (std::size_t index = 0;
              index < diagnostics.value().types.size();
              ++index) {

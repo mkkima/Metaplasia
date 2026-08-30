@@ -53,8 +53,10 @@ restores recorded values rather than assuming Windows defaults.
 
 The feature is rejected without modifying a visual when any required module,
 export, COM interface, endpoint, dispatcher, or approved root contract is
-missing. Callback failures are logged to the debugger but return success to
-XAML Diagnostics so an optional style cannot disrupt visual-tree enumeration.
+missing. Callback failures return success to XAML Diagnostics so an optional
+style cannot disrupt visual-tree enumeration, but the failure stage and native
+HRESULT remain in the bounded agent health snapshot and are copied into the
+persistent host log when diagnostics polls it.
 The shared tracker is bounded to 32 shell elements and refuses overflow before
 writing an element. Adapter failures include the native HRESULT, lifecycle
 stage, and a compact state word whose low bits report service, watcher, and
@@ -102,6 +104,12 @@ failure rolls back the complete scene and retries on a later visual-tree event;
 the adapter never leaves a wide inner frame inside the stock narrow popup.
 Replacement frames are ancestry-checked so late removal of an older frame
 cannot tear down the current scene.
+
+Creating or reparenting scene content itself produces visual-tree callbacks.
+The complete scene transaction is therefore guarded against re-entry, including
+frame, panel, Recommended, All apps, layout, and rollback operations. Generated
+child callbacks may still be observed, but they cannot begin a nested scene
+commit against partially constructed snapshots.
 
 In Three-panel mode, **Hide All apps content** changes only the visibility of
 the injected list. The left panel and the full three-panel frame stay attached,
