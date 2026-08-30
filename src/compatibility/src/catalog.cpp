@@ -407,6 +407,14 @@ std::string_view AdapterName(const AdapterId adapter) noexcept {
     return "unknown";
 }
 
+bool IsTransientRejection(
+    const CompatibilityDecision& decision) noexcept {
+    return !decision.supported &&
+           (decision.detail.starts_with("Required module is not loaded") ||
+            decision.detail.starts_with("Unable to inspect mapped module") ||
+            decision.detail.starts_with("No diagnostic modules"));
+}
+
 Result<WindowsVersion> QueryWindowsVersion() {
     using RtlGetVersionFunction = LONG(WINAPI*)(RTL_OSVERSIONINFOW*);
     const HMODULE ntdll = ::GetModuleHandleW(L"ntdll.dll");

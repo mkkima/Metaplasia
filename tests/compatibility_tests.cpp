@@ -130,6 +130,26 @@ std::vector<std::byte> ProfilePack(
 int main(const int argc, char** argv) {
     using namespace metaplasia::compatibility;
 
+    CompatibilityDecision loading_decision;
+    loading_decision.detail =
+        "Required module is not loaded: Taskbar.View.dll";
+    Require(
+        IsTransientRejection(loading_decision),
+        "missing startup module is transient");
+    loading_decision.detail = "No approved compatibility profile for Windows";
+    Require(
+        !IsTransientRejection(loading_decision),
+        "missing compatibility profile is permanent");
+    loading_decision.detail = "Module identity does not match the profile";
+    Require(
+        !IsTransientRejection(loading_decision),
+        "module identity mismatch is permanent");
+    loading_decision.supported = true;
+    loading_decision.detail = "Required module is not loaded: ignored";
+    Require(
+        !IsTransientRejection(loading_decision),
+        "approved decisions are never transient rejections");
+
     Require(argc == 2, "resource-only compatibility fixture path supplied");
 
     const auto profile = TestProfile();

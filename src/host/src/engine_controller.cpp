@@ -224,13 +224,6 @@ std::string_view CompatibilityTargetName(
     }
 }
 
-bool ShouldRetryCompatibilitySoon(
-    const compatibility::CompatibilityDecision& decision) {
-    return decision.detail.starts_with("Required module is not loaded") ||
-           decision.detail.starts_with("Unable to inspect mapped module") ||
-           decision.detail.starts_with("No diagnostic modules");
-}
-
 std::string CompatibilityDiagnosticMessage(
     const compatibility::CompatibilityDecision& decision) {
     std::ostringstream message;
@@ -1339,6 +1332,15 @@ protocol::TargetSnapshot EngineController::BuildSnapshot(
         compatibility_state != nullptr && compatibility_state->evaluated &&
         compatibility_state->process_id == process.process_id &&
         process.running &&
+        !compatibility_state->supported &&
+        compatibility_state->retry_soon) {
+        snapshot.state = protocol::RuntimeState::injecting;
+        snapshot.detail =
+            "Waiting for Windows shell modules to finish loading";
+    } else if (
+        compatibility_state != nullptr && compatibility_state->evaluated &&
+        compatibility_state->process_id == process.process_id &&
+        process.running &&
         !compatibility_state->supported) {
         snapshot.state = protocol::RuntimeState::incompatible;
         snapshot.detail = compatibility_state->detail;
@@ -1436,8 +1438,12 @@ protocol::TargetSnapshot EngineController::BuildFileExplorerSnapshot() const {
         if (found == explorer_compatibility_.end() ||
             !found->second.evaluated) {
             compatibility_pending = true;
-        } else if (!found->second.supported && incompatible == nullptr) {
-            incompatible = &found->second;
+        } else if (!found->second.supported) {
+            if (found->second.retry_soon) {
+                compatibility_pending = true;
+            } else if (incompatible == nullptr) {
+                incompatible = &found->second;
+            }
         }
     };
 
@@ -1536,7 +1542,7 @@ EngineController::CompatibilityState EngineController::EvaluateCompatibility(
         } else {
             evaluated.supported = decision.value().supported;
             evaluated.retry_soon =
-                ShouldRetryCompatibilitySoon(decision.value());
+                compatibility::IsTransientRejection(decision.value());
             evaluated.profile_id = decision.value().profile_id;
             evaluated.detail = decision.value().detail;
             diagnostic_level = evaluated.supported

@@ -27,7 +27,13 @@ bool EqualsIgnoreCase(
 }
 
 Result<UniqueHandle> CreateModuleSnapshot(const std::uint32_t process_id) {
-    for (int attempt = 0; attempt < 4; ++attempt) {
+    // Toolhelp documents ERROR_BAD_LENGTH as a transient module-list race and
+    // explicitly requires callers to retry. Explorer loads Taskbar modules in
+    // bursts during sign-in, so a handful of immediate yields is not enough on
+    // otherwise healthy systems. Keep the retry bounded so a broken target can
+    // never stall the host monitor indefinitely.
+    constexpr int kMaximumAttempts = 16;
+    for (int attempt = 0; attempt < kMaximumAttempts; ++attempt) {
         UniqueHandle snapshot(::CreateToolhelp32Snapshot(
             TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32,
             process_id));
@@ -38,7 +44,11 @@ Result<UniqueHandle> CreateModuleSnapshot(const std::uint32_t process_id) {
         if (error != ERROR_BAD_LENGTH) {
             return Status::FromWin32("CreateToolhelp32Snapshot(modules)", error);
         }
-        ::SwitchToThread();
+        if (attempt + 1 < kMaximumAttempts) {
+            // A one millisecond backoff lets the loader finish updating its
+            // lists without adding meaningful latency to normal startup.
+            ::Sleep(1);
+        }
     }
     return Status::FromWin32(
         "CreateToolhelp32Snapshot(modules)",
