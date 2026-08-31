@@ -68,6 +68,13 @@ counters are included in both the UI summary and `metaplasia-cli xaml-types`.
 State transitions and new failures are persisted as `xaml-style` host events;
 unchanged health polls are deduplicated.
 
+The Start scene retry policy is also reflected in these counters. Deterministic
+contract and unsupported-property failures stop after one attempt until an
+explicit reconfiguration or required dependency change. Other failures stop
+after three consecutive attempts for the same scene. This keeps `attempts` and
+`failures` actionable instead of allowing unrelated XAML traffic to create a
+retry storm.
+
 The structured log records host lifecycle, watchdog failures, settings changes,
 configuration success or failure, and crash-loop safe mode. Identical rapid
 configuration failures are rate-limited in the log and repeated at most once

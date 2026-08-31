@@ -96,6 +96,13 @@ child index are captured before mutation. Disable restores those values in
 dependency order; a failed restoration keeps its snapshot so a later
 configuration pass can retry.
 
+The frame-envelope contract is validated through `Border`,
+`ScrollContentPresenter`, `RootScrollViewer`, `FullWindowMediaRoot`, and
+`PopupRoot`. Only the first three mutable descendants receive the expanded
+layout. `FullWindowMediaRoot` and `PopupRoot` remain untouched because Windows
+owns the outer popup dimensions and rejects direct size writes with
+`ERROR_NOT_SUPPORTED`.
+
 The expanded clipping envelope, the three acrylic surfaces, and their injected
 content are committed as one scene. Until the current `MainMenu` is confirmed
 as a descendant of the current frame and every required surface is available,
@@ -104,6 +111,12 @@ failure rolls back the complete scene and retries on a later visual-tree event;
 the adapter never leaves a wide inner frame inside the stock narrow popup.
 Replacement frames are ancestry-checked so late removal of an older frame
 cannot tear down the current scene.
+
+Deterministic contract or property failures are not retried for every unrelated
+visual-tree callback. One failure is retained in diagnostics until the user
+reconfigures the target or a required scene dependency changes. Other repeated
+scene failures are capped at three consecutive attempts per unchanged
+dependency set.
 
 Creating or reparenting scene content itself produces visual-tree callbacks.
 The complete scene transaction is therefore guarded against re-entry, including

@@ -423,7 +423,7 @@ public:
         }
         if (frame_envelope_failures_remaining != 0) {
             --frame_envelope_failures_remaining;
-            return E_FAIL;
+            return frame_envelope_failure;
         }
         auto* token = new (std::nothrow) std::uint8_t(1);
         if (token == nullptr) {
@@ -608,6 +608,7 @@ public:
     std::size_t recommended_writes{0};
     std::size_t frame_envelope_writes{0};
     std::size_t frame_envelope_failures_remaining{0};
+    HRESULT frame_envelope_failure{E_FAIL};
     metaplasia::agent::ShellXamlStyle* reentrant_style{nullptr};
     bool reentrant_surface_callback_fired{false};
     std::uint64_t last_surface_main_menu{0};
@@ -1242,6 +1243,99 @@ int main() {
             true) &&
         layout_style.ApplyDesiredToTrackedElements() == S_OK,
         "release all Start layout snapshots on target disable");
+
+    FakeAccessor rejected_layout_accessor;
+    ShellXamlStyle rejected_layout_style(
+        rejected_layout_accessor,
+        metaplasia::protocol::AgentTarget::start_menu);
+    for (const std::uint64_t handle :
+         {600U, 601U, 602U, 603U, 604U}) {
+        rejected_layout_accessor.Add(handle);
+    }
+    Require(
+        rejected_layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true),
+        "configure deterministic Start scene failure test");
+    Require(
+        rejected_layout_style.OnElementAdded(
+            600,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"MainMenu") == S_OK &&
+            rejected_layout_style.OnElementAdded(
+                601,
+                L"Windows.UI.Xaml.Controls.Border",
+                L"AcrylicBorder",
+                600) == S_OK &&
+            rejected_layout_style.OnElementAdded(
+                602,
+                L"Windows.UI.Xaml.Controls.Grid",
+                L"MainContent",
+                600) == S_FALSE &&
+            rejected_layout_style.OnElementAdded(
+                603,
+                L"Windows.UI.Xaml.Controls.Border",
+                L"AcrylicOverlay",
+                602) == S_OK,
+        "observe dependencies for deterministic Start scene failure test");
+    rejected_layout_accessor.frame_envelope_failure =
+        HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+    rejected_layout_accessor.frame_envelope_failures_remaining = 100;
+    Require(
+        FAILED(rejected_layout_style.OnElementAdded(
+            604,
+            L"StartMenu.StartBlendedFlexFrame")),
+        "surface the first deterministic Start scene failure");
+    for (std::uint64_t handle = 700; handle < 720; ++handle) {
+        rejected_layout_accessor.Add(handle);
+        Require(
+            rejected_layout_style.OnElementAdded(
+                handle,
+                L"Windows.UI.Xaml.Controls.Grid",
+                L"UnrelatedVisual") == S_FALSE,
+            "ignore unrelated visual traffic after deterministic failure");
+    }
+    metaplasia::protocol::XamlDiagnosticsSnapshot suppressed_health;
+    rejected_layout_style.CopyRuntimeDiagnostics(suppressed_health);
+    Require(
+        suppressed_health.style_apply_attempt_count == 1 &&
+            suppressed_health.style_apply_failure_count == 1 &&
+            suppressed_health.style_state ==
+                metaplasia::protocol::XamlStyleState::failed,
+        "suppress the deterministic Start scene retry storm");
+    Require(
+        rejected_layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true) &&
+            FAILED(rejected_layout_style.ApplyDesiredToTrackedElements()),
+        "allow one fresh scene attempt after explicit reconfiguration");
+    rejected_layout_style.CopyRuntimeDiagnostics(suppressed_health);
+    Require(
+        suppressed_health.style_apply_attempt_count == 2 &&
+            suppressed_health.style_apply_failure_count == 2,
+        "bound each deterministic failure to one attempt per configuration");
 
     Require(
         style.Configure(true, 1000, false, false, false, 900, false),

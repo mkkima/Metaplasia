@@ -134,8 +134,11 @@ struct ElementLayoutSnapshot final {
 };
 
 struct StartMenuFrameEnvelopeSnapshot final {
-    std::array<ComPtr<FrameworkElement>, 4> elements;
-    std::array<ElementLayoutSnapshot, 4> layouts;
+    // FullWindowMediaRoot is the verified outer boundary, but Windows owns
+    // its dimensions and rejects Width/Height writes with ERROR_NOT_SUPPORTED.
+    // Only the three mutable descendants participate in the snapshot.
+    std::array<ComPtr<FrameworkElement>, 3> elements;
+    std::array<ElementLayoutSnapshot, 3> layouts;
     bool restored{false};
 };
 
@@ -943,7 +946,7 @@ public:
             L"Windows.UI.Xaml.Controls.ScrollContentPresenter",
             L"Windows.UI.Xaml.Internal.RootScrollViewer",
             L"Windows.UI.Xaml.FullWindowMediaRoot"};
-        std::array<ComPtr<FrameworkElement>, expected_types.size()> elements;
+        std::array<ComPtr<FrameworkElement>, 3> elements;
         for (std::size_t index = 0; index < expected_types.size(); ++index) {
             ComPtr<DependencyObject> parent;
             result = current->get_Parent(parent.GetAddressOf());
@@ -960,12 +963,16 @@ public:
                 return result;
             }
             if (runtime_name != expected_types[index]) {
-                return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
             }
-            if (FAILED(result = parent.As(&elements[index]))) {
+            ComPtr<FrameworkElement> parent_element;
+            if (FAILED(result = parent.As(&parent_element))) {
                 return result;
             }
-            current = elements[index];
+            if (index < elements.size()) {
+                elements[index] = parent_element;
+            }
+            current = std::move(parent_element);
         }
 
         ComPtr<DependencyObject> untouched_root;
@@ -982,7 +989,7 @@ public:
             return result;
         }
         if (root_runtime_name != L"Windows.UI.Xaml.PopupRoot") {
-            return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+            return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
         }
 
         auto* captured =

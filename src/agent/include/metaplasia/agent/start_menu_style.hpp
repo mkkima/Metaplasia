@@ -429,6 +429,8 @@ private:
         std::uint64_t parent_handle) noexcept;
     [[nodiscard]] bool StartMenuSceneNeedsRetry() const noexcept;
     [[nodiscard]] HRESULT RefreshStartMenuLayout() noexcept;
+    void ResetStartMenuSceneRetryState() noexcept;
+    void RegisterStartMenuSceneFailure(HRESULT error) noexcept;
     [[nodiscard]] std::uint16_t StartMenuSceneDependencies() const noexcept;
     void PublishStartMenuSceneDependencies() noexcept;
     void SetStartMenuStyleStatus(
@@ -499,11 +501,14 @@ private:
     std::atomic<std::uint32_t> style_status_sequence_{0};
     std::atomic<std::uint16_t> scene_dependencies_{
         protocol::xaml_scene_dependency_none};
+    std::atomic<bool> start_menu_scene_retry_reset_requested_{false};
     std::array<TrackedElement, kMaximumTrackedShellXamlElements> tracked_{};
     std::array<TaskbarLayoutRelation, kMaximumTrackedTaskbarLayouts>
         taskbar_layouts_{};
     StartMenuLayoutRelation start_menu_layout_{};
     bool start_menu_layout_mutation_in_progress_{false};
+    std::uint8_t start_menu_scene_consecutive_failures_{0};
+    bool start_menu_scene_retry_suppressed_{false};
 };
 
 }  // namespace metaplasia::agent
