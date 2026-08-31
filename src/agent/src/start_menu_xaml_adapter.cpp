@@ -136,9 +136,9 @@ struct ElementLayoutSnapshot final {
 };
 
 struct StartMenuFrameEnvelopeSnapshot final {
-    // FullWindowMediaRoot is the verified outer boundary, but Windows owns
-    // its dimensions and rejects Width/Height writes with ERROR_NOT_SUPPORTED.
-    // Only the three mutable descendants participate in the snapshot.
+    // FullWindowMediaRoot is the verified outer boundary. Windows owns the
+    // root surfaces above it, so only the three descendants participate in
+    // the snapshot and in reversible layout mutations.
     std::array<ComPtr<FrameworkElement>, 3> elements;
     std::array<ElementLayoutSnapshot, 3> layouts;
     bool restored{false};
@@ -983,25 +983,6 @@ public:
                 elements[index] = parent_element;
             }
             current = std::move(parent);
-        }
-
-        ComPtr<DependencyObject> untouched_root;
-        result = visual_tree->GetParent(
-            current.Get(),
-            untouched_root.GetAddressOf());
-        if (FAILED(result) || untouched_root == nullptr) {
-            return FAILED(result) ? result : E_NOTFOUND;
-        }
-        std::wstring_view root_runtime_name;
-        Microsoft::WRL::Wrappers::HString root_runtime_name_storage;
-        if (FAILED(result = ReadRuntimeClassName(
-                       untouched_root.Get(),
-                       root_runtime_name_storage,
-                       root_runtime_name))) {
-            return result;
-        }
-        if (root_runtime_name != L"Windows.UI.Xaml.PopupRoot") {
-            return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
         }
 
         auto* captured =

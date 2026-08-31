@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(Metaplasia VERSION 0.1.13 LANGUAGES C CXX)
+project(Metaplasia VERSION 0.1.14 LANGUAGES C CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Metaplasia currently supports Windows only")

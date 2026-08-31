@@ -1,6 +1,6 @@
 [package]
 name = "metaplasia-ui"
-version = "0.1.13"
+version = "0.1.14"
 description = "Local control center for Metaplasia"
 edition = "2024"
 license = "MIT"

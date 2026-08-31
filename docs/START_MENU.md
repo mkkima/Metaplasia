@@ -97,12 +97,14 @@ dependency order; a failed restoration keeps its snapshot so a later
 configuration pass can retry.
 
 The frame-envelope contract is validated through `Border`,
-`ScrollContentPresenter`, `RootScrollViewer`, `FullWindowMediaRoot`, and
-`PopupRoot` using `VisualTreeHelper.GetParent`. `FrameworkElement.Parent` is a
-logical-parent API and is not used for this check because template boundaries
-can make it differ from the visual tree reported by XAML Diagnostics. Only the
-first three mutable descendants receive the expanded layout;
-`FullWindowMediaRoot` and `PopupRoot` remain verified, untouched boundaries.
+`ScrollContentPresenter`, `RootScrollViewer`, and `FullWindowMediaRoot` using
+`VisualTreeHelper.GetParent`. `FrameworkElement.Parent` is a logical-parent API
+and is not used for this check because template boundaries can make it differ
+from the visual tree reported by XAML Diagnostics. Only the first three mutable
+descendants receive the expanded layout; `FullWindowMediaRoot` remains the
+verified, untouched boundary. Root-owned surfaces above it are deliberately
+excluded because `PopupRoot` can be exposed as a sibling root surface rather
+than an ancestor of the Start frame.
 
 The expanded clipping envelope, the three acrylic surfaces, and their injected
 content are committed as one scene. Until the current `MainMenu` is confirmed
