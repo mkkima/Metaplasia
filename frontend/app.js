@@ -73,6 +73,7 @@ const AGENT_RESULT_LABELS = {
 const HRESULT_LABELS = {
   "80004005": "Unspecified native failure (E_FAIL)",
   "80070005": "Access denied",
+  "8007000D": "Invalid native data or visual-tree contract",
   "800705B4": "Operation timed out",
   "800401F0": "COM was not initialized on the calling thread",
   "8001010E": "COM interface was used from the wrong thread"
@@ -1341,7 +1342,7 @@ function interpretTargetDiagnostic(target) {
   const detail = target.detail || "No detail was returned by the native host.";
   const resultMatch = detail.match(/code\s+(\d+)/i);
   const nativeMatch = detail.match(/native=0x([0-9a-f]+)/i);
-  const stageMatch = detail.match(/stage=([^)]+)/i);
+  const stageMatch = detail.match(/stage=([^,)\s]+)/i);
   const stateMatch = detail.match(/state=0x([0-9a-f]+)/i);
   const resultCode = resultMatch ? Number(resultMatch[1]) : null;
   const nativeCode = nativeMatch?.[1]?.toUpperCase() || "";
@@ -1354,6 +1355,9 @@ function interpretTargetDiagnostic(target) {
   if (target.state === "error" && resultCode === 7 && stage === "advise-visual-tree") {
     summary = "Windows XAML visual-tree subscription failed";
     explanation = "The agent and XAML controller loaded, but the callback subscription that observes this Windows shell surface was not established. The incomplete style change was rolled back.";
+  } else if (target.state === "error" && nativeCode === "8007000D" && stage === "create-frame-envelope") {
+    summary = "Start frame visual-tree contract mismatch";
+    explanation = "The agent loaded, but the visual parent chain around the Start frame did not match the approved Windows shell structure. No incomplete three-panel scene was committed.";
   } else if (target.state === "error" && resultCode !== null) {
     summary = AGENT_RESULT_LABELS[resultCode] || `Native agent failure ${resultCode}`;
     explanation = "The native agent rejected the requested configuration and rolled back the incomplete change.";

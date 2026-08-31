@@ -98,10 +98,11 @@ configuration pass can retry.
 
 The frame-envelope contract is validated through `Border`,
 `ScrollContentPresenter`, `RootScrollViewer`, `FullWindowMediaRoot`, and
-`PopupRoot`. Only the first three mutable descendants receive the expanded
-layout. `FullWindowMediaRoot` and `PopupRoot` remain untouched because Windows
-owns the outer popup dimensions and rejects direct size writes with
-`ERROR_NOT_SUPPORTED`.
+`PopupRoot` using `VisualTreeHelper.GetParent`. `FrameworkElement.Parent` is a
+logical-parent API and is not used for this check because template boundaries
+can make it differ from the visual tree reported by XAML Diagnostics. Only the
+first three mutable descendants receive the expanded layout;
+`FullWindowMediaRoot` and `PopupRoot` remain verified, untouched boundaries.
 
 The expanded clipping envelope, the three acrylic surfaces, and their injected
 content are committed as one scene. Until the current `MainMenu` is confirmed

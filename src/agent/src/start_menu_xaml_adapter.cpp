@@ -81,6 +81,8 @@ using XamlGridStatics = ABI::Windows::UI::Xaml::Controls::IGridStatics;
 using XamlUiElementVector =
     __FIVector_1_Windows__CUI__CXaml__CUIElement;
 using XamlBrush = ABI::Windows::UI::Xaml::Media::IBrush;
+using XamlVisualTreeHelperStatics =
+    ABI::Windows::UI::Xaml::Media::IVisualTreeHelperStatics;
 using XamlImageSource = ABI::Windows::UI::Xaml::Media::IImageSource;
 using XamlWriteableBitmap =
     ABI::Windows::UI::Xaml::Media::Imaging::IWriteableBitmap;
@@ -899,9 +901,11 @@ public:
             return result;
         }
         ComPtr<IUnknown> ancestor_identity;
-        ComPtr<FrameworkElement> current;
+        ComPtr<DependencyObject> current;
+        ComPtr<XamlVisualTreeHelperStatics> visual_tree;
         if (FAILED(result = ancestor_inspectable.As(&ancestor_identity)) ||
-            FAILED(result = descendant_inspectable.As(&current))) {
+            FAILED(result = descendant_inspectable.As(&current)) ||
+            FAILED(result = GetVisualTreeHelperStatics(visual_tree))) {
             return result;
         }
         constexpr std::size_t kMaximumAncestorDepth = 64;
@@ -917,13 +921,15 @@ public:
                 return S_OK;
             }
             ComPtr<DependencyObject> parent;
-            if (FAILED(result = current->get_Parent(parent.GetAddressOf()))) {
+            if (FAILED(result = visual_tree->GetParent(
+                           current.Get(),
+                           parent.GetAddressOf()))) {
                 return result;
             }
             if (parent == nullptr) {
                 current.Reset();
-            } else if (FAILED(result = parent.As(&current))) {
-                return result;
+            } else {
+                current = std::move(parent);
             }
         }
         return current == nullptr ? S_OK : E_UNEXPECTED;
@@ -935,9 +941,11 @@ public:
         snapshot = 0;
         ComPtr<IInspectable> frame_inspectable;
         HRESULT result = ResolveInspectable(frame_handle, frame_inspectable);
-        ComPtr<FrameworkElement> current;
+        ComPtr<DependencyObject> current;
+        ComPtr<XamlVisualTreeHelperStatics> visual_tree;
         if (FAILED(result) ||
-            FAILED(result = frame_inspectable.As(&current))) {
+            FAILED(result = frame_inspectable.As(&current)) ||
+            FAILED(result = GetVisualTreeHelperStatics(visual_tree))) {
             return result;
         }
 
@@ -949,7 +957,9 @@ public:
         std::array<ComPtr<FrameworkElement>, 3> elements;
         for (std::size_t index = 0; index < expected_types.size(); ++index) {
             ComPtr<DependencyObject> parent;
-            result = current->get_Parent(parent.GetAddressOf());
+            result = visual_tree->GetParent(
+                current.Get(),
+                parent.GetAddressOf());
             if (FAILED(result) || parent == nullptr) {
                 return FAILED(result) ? result : E_NOTFOUND;
             }
@@ -972,11 +982,13 @@ public:
             if (index < elements.size()) {
                 elements[index] = parent_element;
             }
-            current = std::move(parent_element);
+            current = std::move(parent);
         }
 
         ComPtr<DependencyObject> untouched_root;
-        result = current->get_Parent(untouched_root.GetAddressOf());
+        result = visual_tree->GetParent(
+            current.Get(),
+            untouched_root.GetAddressOf());
         if (FAILED(result) || untouched_root == nullptr) {
             return FAILED(result) ? result : E_NOTFOUND;
         }
@@ -2087,6 +2099,17 @@ private:
             class_name.Get(),
             __uuidof(XamlGridStatics),
             reinterpret_cast<void**>(grid.GetAddressOf()));
+    }
+
+    [[nodiscard]] static HRESULT GetVisualTreeHelperStatics(
+        ComPtr<XamlVisualTreeHelperStatics>& visual_tree) noexcept {
+        visual_tree.Reset();
+        Microsoft::WRL::Wrappers::HStringReference class_name(
+            RuntimeClass_Windows_UI_Xaml_Media_VisualTreeHelper);
+        return ::RoGetActivationFactory(
+            class_name.Get(),
+            __uuidof(XamlVisualTreeHelperStatics),
+            reinterpret_cast<void**>(visual_tree.GetAddressOf()));
     }
 
     [[nodiscard]] static HRESULT RemoveElement(
