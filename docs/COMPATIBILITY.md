@@ -14,12 +14,15 @@ Each adapter has an independent compiled profile containing:
   PDB age encoded in the module compatibility key;
 - an adapter-specific profile identifier.
 
-The compiled catalog contains separate exact profiles for Windows 11 25H2 x64
-revisions `10.0.26200.8875` and `10.0.26200.9168`. The latter was captured from
-the mapped shell processes and cross-checked against the protected on-disk
-images on the affected machine. Neither entry implies support for any other
-revision in the 26200 family, and broad compatibility still requires a clean
-multi-build VM matrix.
+The compiled catalog contains complete Taskbar, File Explorer, and Start
+profiles for Windows 11 25H2 x64 revisions `10.0.26200.8875` and
+`10.0.26200.9168`, plus a Start-only profile for `10.0.26200.8037`. The 8037
+profile and three-panel scene were exercised by the isolated Hyper-V E2E run;
+it does not approve Taskbar or File Explorer on that revision. The later
+profiles were captured from mapped shell processes and cross-checked against
+the protected on-disk images on the affected machines. No entry implies support
+for any other revision in the 26200 family, and broad compatibility still
+requires a clean multi-build VM matrix.
 
 ## Signed external profiles
 

@@ -87,6 +87,7 @@ enum class StartMenuLayoutRule : std::uint8_t {
     none = 0,
     frame,
     frame_container,
+    legacy_frame_container,
     frame_shadow,
     search_box,
     navigation_pane,
@@ -268,6 +269,8 @@ public:
         std::uint64_t& snapshot) noexcept = 0;
     [[nodiscard]] virtual HRESULT UpdateStartMenuThreePanelSurface(
         std::uint64_t snapshot) noexcept = 0;
+    [[nodiscard]] virtual HRESULT ValidateStartMenuThreePanelSurface(
+        std::uint64_t snapshot) noexcept = 0;
     [[nodiscard]] virtual HRESULT RestoreStartMenuThreePanelSurface(
         std::uint64_t snapshot) noexcept = 0;
     virtual void ReleaseStartMenuThreePanelSurfaceSnapshot(
@@ -385,14 +388,23 @@ private:
     };
 
     struct StartMenuLayoutRelation final {
+        enum class SceneContract : std::uint8_t {
+            unknown = 0,
+            blended_frame,
+            sizing_frame,
+        };
+
         struct Candidate final {
             std::uint64_t handle{0};
             std::uint64_t parent_handle{0};
         };
 
         std::uint64_t frame_handle{0};
+        SceneContract scene_contract{SceneContract::unknown};
         std::uint64_t frame_envelope_snapshot{0};
         std::uint64_t main_menu_handle{0};
+        std::uint64_t blended_main_menu_candidate{0};
+        std::uint64_t sizing_main_menu_candidate{0};
         std::uint64_t acrylic_border_handle{0};
         std::uint64_t acrylic_overlay_handle{0};
         std::uint64_t main_content_handle{0};

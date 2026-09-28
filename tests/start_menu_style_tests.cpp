@@ -495,6 +495,15 @@ public:
         return S_OK;
     }
 
+    HRESULT ValidateStartMenuThreePanelSurface(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0 || !surface_active) {
+            return E_INVALIDARG;
+        }
+        ++surface_validations;
+        return surface_validation_result;
+    }
+
     HRESULT RestoreStartMenuThreePanelSurface(
         const std::uint64_t snapshot) noexcept override {
         if (snapshot == 0) {
@@ -604,6 +613,8 @@ public:
     bool descendant_relation_valid{true};
     std::uint64_t detached_descendant_handle{0};
     std::size_t surface_writes{0};
+    std::size_t surface_validations{0};
+    HRESULT surface_validation_result{S_OK};
     std::size_t all_apps_writes{0};
     std::size_t recommended_writes{0};
     std::size_t frame_envelope_writes{0};
@@ -685,6 +696,19 @@ int main() {
             L"Windows.UI.Xaml.Controls.Grid",
             L"MainMenu") == StartMenuLayoutRule::frame_container,
         "identify an exact internal frame container");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"RootContent") ==
+            StartMenuLayoutRule::legacy_frame_container,
+        "identify the certified sizing-frame container");
+    Require(
+        IdentifyStartMenuLayoutRule(
+            metaplasia::protocol::AgentTarget::start_menu,
+            L"StartDocked.SearchBoxToggleButton",
+            L"StartMenuSearchBox") == StartMenuLayoutRule::search_box,
+        "identify the sizing-frame search control");
     Require(
         IdentifyStartMenuLayoutRule(
             metaplasia::protocol::AgentTarget::start_menu,
@@ -1013,7 +1037,8 @@ int main() {
             layout_accessor.all_apps_attached &&
             !layout_accessor.recommended_attached &&
             layout_accessor.reentrant_surface_callback_fired &&
-            layout_accessor.surface_writes == 1,
+            layout_accessor.surface_writes == 1 &&
+            layout_accessor.surface_validations == 1,
         "retry atomically, suppress a reentrant generated-child callback, "
         "and allow an empty Recommended panel");
     metaplasia::protocol::XamlDiagnosticsSnapshot active_health;
@@ -1030,6 +1055,28 @@ int main() {
             active_health.scene_dependencies ==
                 metaplasia::protocol::xaml_scene_dependency_all,
         "publish verified Start scene activation after bounded recovery");
+    layout_accessor.surface_validation_result = E_FAIL;
+    Require(
+        FAILED(layout_style.ApplyDesiredToTrackedElements()) &&
+            !layout_accessor.frame_envelope_active &&
+            !layout_accessor.surface_active &&
+            !layout_accessor.all_apps_attached,
+        "roll back the complete scene when live geometry validation fails");
+    metaplasia::protocol::XamlDiagnosticsSnapshot geometry_failure_health;
+    layout_style.CopyRuntimeDiagnostics(geometry_failure_health);
+    Require(
+        geometry_failure_health.style_state ==
+                metaplasia::protocol::XamlStyleState::failed &&
+            geometry_failure_health.style_stage ==
+                metaplasia::protocol::XamlStyleStage::apply_element_layout,
+        "publish a geometry validation failure before reporting active");
+    layout_accessor.surface_validation_result = S_OK;
+    Require(
+        layout_style.ApplyDesiredToTrackedElements() == S_OK &&
+            layout_accessor.frame_envelope_active &&
+            layout_accessor.surface_active &&
+            layout_accessor.all_apps_attached,
+        "recover atomically after live geometry becomes valid");
     Require(
         layout_accessor.last_surface_main_menu == 500 &&
             layout_accessor.last_surface_acrylic_border == 501 &&
@@ -1221,11 +1268,16 @@ int main() {
         "commit the replacement scene only after its native relations are "
         "valid");
     layout_style.OnElementRemoved(506);
+    metaplasia::protocol::XamlDiagnosticsSnapshot late_removal_health;
+    layout_style.CopyRuntimeDiagnostics(late_removal_health);
     Require(
         layout_accessor.frame_envelope_active &&
             layout_accessor.surface_active &&
-            layout_accessor.all_apps_attached,
-        "ignore late removal of the detached old frame");
+            layout_accessor.all_apps_attached &&
+            late_removal_health.style_state ==
+                metaplasia::protocol::XamlStyleState::active,
+        "ignore late removal of the detached old frame without demoting the "
+        "active scene");
     Require(
         layout_style.Configure(
             false,
@@ -1243,6 +1295,98 @@ int main() {
             true) &&
         layout_style.ApplyDesiredToTrackedElements() == S_OK,
         "release all Start layout snapshots on target disable");
+
+    FakeAccessor sizing_layout_accessor;
+    ShellXamlStyle sizing_layout_style(
+        sizing_layout_accessor,
+        metaplasia::protocol::AgentTarget::start_menu);
+    for (const std::uint64_t handle :
+         {800U, 801U, 802U, 803U, 804U, 805U, 806U, 807U}) {
+        sizing_layout_accessor.Add(handle);
+    }
+    Require(
+        sizing_layout_style.Configure(
+            true,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true),
+        "enable the sizing-frame scene contract");
+    Require(
+        sizing_layout_style.OnElementAdded(
+            800,
+            L"StartDocked.StartSizingFrame") == S_OK &&
+            sizing_layout_style.OnElementAdded(
+                807,
+                L"Windows.UI.Xaml.Controls.Grid",
+                L"MainMenu") == S_OK &&
+            sizing_layout_style.OnElementAdded(
+                801,
+                L"Windows.UI.Xaml.Controls.Grid",
+                L"RootContent") == S_OK &&
+            sizing_layout_style.OnElementAdded(
+                802,
+                L"Windows.UI.Xaml.Controls.Border",
+                L"AcrylicBorder",
+                801) == S_OK &&
+            sizing_layout_style.OnElementAdded(
+                803,
+                L"Windows.UI.Xaml.Controls.Grid",
+                L"MainContent",
+                801) == S_FALSE &&
+            sizing_layout_style.OnElementAdded(
+                804,
+                L"Windows.UI.Xaml.Controls.Border",
+                L"AcrylicOverlay",
+                803) == S_OK,
+        "commit the exact sizing-frame acrylic relation");
+    Require(
+        sizing_layout_accessor.surface_active &&
+            sizing_layout_accessor.frame_envelope_active &&
+            sizing_layout_accessor.all_apps_attached &&
+            sizing_layout_accessor.last_surface_main_menu == 801 &&
+            sizing_layout_accessor.Find(800)->layout_active &&
+            sizing_layout_accessor.Find(801)->layout_active &&
+            !sizing_layout_accessor.Find(807)->layout_active,
+        "keep blended and sizing frame contracts isolated");
+    Require(
+        sizing_layout_style.OnElementAdded(
+            805,
+            L"Windows.UI.Xaml.Controls.Grid",
+            L"TopLevelSuggestionsContainer",
+            806) == S_OK &&
+            sizing_layout_accessor.recommended_attached &&
+            sizing_layout_accessor.Find(805)->layout_active,
+        "attach the sizing-frame Recommended content to its panel");
+    Require(
+        sizing_layout_style.Configure(
+            false,
+            1000,
+            false,
+            false,
+            false,
+            false,
+            false,
+            0xFF000000U,
+            1000,
+            false,
+            false,
+            0xFF000000U,
+            true) &&
+            sizing_layout_style.ApplyDesiredToTrackedElements() == S_OK &&
+            !sizing_layout_accessor.surface_active &&
+            !sizing_layout_accessor.frame_envelope_active &&
+            !sizing_layout_accessor.all_apps_attached &&
+            !sizing_layout_accessor.recommended_attached,
+        "restore the sizing-frame scene on disable");
 
     FakeAccessor rejected_layout_accessor;
     ShellXamlStyle rejected_layout_style(

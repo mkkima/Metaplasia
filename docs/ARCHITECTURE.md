@@ -208,11 +208,12 @@ Current target maturity:
 |---|---:|---:|---:|
 | Taskbar | implemented | implemented | responsive capsule, independent solid color, clock prefix, opacity, three visibility rules |
 | File Explorer | implemented | implemented | independent full-window color, multi-process owned title prefix |
-| Start menu | implemented | implemented | independent solid color, opacity and Recommended visibility |
+| Start menu | implemented | implemented | independent solid color, opacity, Recommended visibility, reversible three-panel scene |
 
-The catalog currently contains exact Windows 11 25H2 profiles for revisions
-`26200.8875` and `26200.9168`. This is a functional compatibility mechanism,
-not yet a broad Windows support matrix.
+The catalog currently contains complete Windows 11 25H2 profiles for revisions
+`26200.8875` and `26200.9168`, plus a Start-only profile for `26200.8037`.
+This is a functional compatibility mechanism, not yet a broad Windows support
+matrix.
 
 ## Recovery behavior
 

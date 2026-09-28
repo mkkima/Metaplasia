@@ -7,6 +7,7 @@ target_link_libraries(
     metaplasia_watchdog
     PRIVATE
         metaplasia_base
+        metaplasia_host_diagnostics
         metaplasia_host_settings
         metaplasia_injector
         metaplasia_platform

@@ -82,6 +82,39 @@ int main() {
             "rotated log backup");
     }
 
+    {
+        metaplasia::host::DiagnosticLog watchdog_log(
+            directory,
+            4096,
+            1,
+            L"watchdog.log");
+        watchdog_log.Write(
+            metaplasia::host::DiagnosticLevel::info,
+            "watchdog",
+            "startup",
+            "host",
+            73,
+            "Watchdog startup began");
+        Require(
+            watchdog_log.path().filename() == L"watchdog.log",
+            "custom log filename");
+        Require(
+            std::filesystem::is_regular_file(watchdog_log.path()),
+            "custom log file");
+    }
+
+    {
+        metaplasia::host::DiagnosticLog rejected_name(
+            directory,
+            4096,
+            1,
+            L"..");
+        Require(
+            rejected_name.path().filename() == L"host.log" &&
+                rejected_name.path().parent_path() == directory,
+            "reject a diagnostic log filename outside the fixed allowlist");
+    }
+
     std::filesystem::remove_all(directory, cleanup_error);
     return 0;
 }

@@ -128,9 +128,13 @@ std::string BuildLine(
 DiagnosticLog::DiagnosticLog(
     std::filesystem::path directory,
     const std::size_t maximum_bytes,
-    const std::size_t backup_count) noexcept
+    const std::size_t backup_count,
+    std::filesystem::path file_name) noexcept
     : directory_(std::move(directory)),
-      path_(directory_ / L"host.log"),
+      path_(directory_ /
+            (file_name == L"watchdog.log"
+                 ? std::filesystem::path(L"watchdog.log")
+                 : std::filesystem::path(L"host.log"))),
       maximum_bytes_((std::max)(maximum_bytes, std::size_t{4096})),
       backup_count_((std::min)(backup_count, std::size_t{16})) {
     std::error_code error;

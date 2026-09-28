@@ -182,6 +182,47 @@ std::string_view XamlStyleStageName(
     }
 }
 
+std::string_view StartMenuFrameEnvelopeOperationName(
+    const protocol::StartMenuFrameEnvelopeOperation operation) noexcept {
+    using Operation = protocol::StartMenuFrameEnvelopeOperation;
+    switch (operation) {
+        case Operation::none:
+            return "none";
+        case Operation::resolve_frame:
+            return "resolve-frame";
+        case Operation::query_frame:
+            return "query-frame";
+        case Operation::initialize_visual_tree:
+            return "initialize-visual-tree";
+        case Operation::read_frame_type:
+            return "read-frame-type";
+        case Operation::validate_frame_type:
+            return "validate-frame-type";
+        case Operation::get_parent:
+            return "get-parent";
+        case Operation::read_parent_type:
+            return "read-parent-type";
+        case Operation::validate_parent_type:
+            return "validate-parent-type";
+        case Operation::query_parent:
+            return "query-parent";
+        case Operation::get_boundary:
+            return "get-boundary";
+        case Operation::read_boundary_type:
+            return "read-boundary-type";
+        case Operation::validate_boundary_type:
+            return "validate-boundary-type";
+        case Operation::allocate_snapshot:
+            return "allocate-snapshot";
+        case Operation::capture_layout:
+            return "capture-layout";
+        case Operation::write_layout:
+            return "write-layout";
+        default:
+            return "unknown";
+    }
+}
+
 std::string_view CustomizationTarget(
     const protocol::CustomizationId customization) noexcept {
     switch (customization) {
@@ -601,6 +642,19 @@ Result<protocol::XamlDiagnosticsResponse> EngineController::XamlDiagnostics(
                    << ", attempts=" << value.style_apply_attempt_count
                    << ", successes=" << value.style_apply_success_count
                    << ", failures=" << value.style_apply_failure_count;
+            if (value.frame_envelope_failure_operation !=
+                protocol::StartMenuFrameEnvelopeOperation::none) {
+                detail << ", envelope-operation="
+                       << StartMenuFrameEnvelopeOperationName(
+                              value.frame_envelope_failure_operation)
+                       << ", envelope-index="
+                       << static_cast<unsigned int>(
+                              value.frame_envelope_failure_index)
+                       << ", envelope-native=0x" << std::hex
+                       << std::uppercase
+                       << value.frame_envelope_failure_native_error
+                       << std::dec;
+            }
             diagnostic_log_.Write(
                 value.style_state == protocol::XamlStyleState::failed
                     ? DiagnosticLevel::error

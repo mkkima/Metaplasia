@@ -1,6 +1,7 @@
 #include "metaplasia/base/unique_handle.hpp"
 #include "metaplasia/base/utf.hpp"
 #include "metaplasia/base/windows_paths.hpp"
+#include "metaplasia/host/diagnostic_log.hpp"
 #include "metaplasia/host/settings_store.hpp"
 #include "metaplasia/injector/injector.hpp"
 #include "metaplasia/platform/process.hpp"
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -27,6 +29,8 @@ using metaplasia::UniqueHandle;
 using metaplasia::watchdog::LaunchArguments;
 
 constexpr auto kAgentDeactivationTimeout = std::chrono::seconds(3);
+
+std::unique_ptr<metaplasia::host::DiagnosticLog> g_diagnostic_log;
 
 class OwnedMutex final {
 public:
@@ -46,7 +50,20 @@ private:
     UniqueHandle handle_;
 };
 
-void Log(const std::string_view message) noexcept {
+void Log(
+    const std::string_view message,
+    const std::string_view event = "operation-failed",
+    const metaplasia::host::DiagnosticLevel level =
+        metaplasia::host::DiagnosticLevel::error) noexcept {
+    if (g_diagnostic_log) {
+        g_diagnostic_log->Write(
+            level,
+            "watchdog",
+            event,
+            "host",
+            ::GetCurrentProcessId(),
+            message);
+    }
     const auto wide = metaplasia::Utf8ToWide(message);
     if (!wide.ok()) {
         ::OutputDebugStringW(L"[Metaplasia Watchdog] An unprintable error occurred.\n");
@@ -55,6 +72,40 @@ void Log(const std::string_view message) noexcept {
     const std::wstring line =
         L"[Metaplasia Watchdog] " + wide.value() + L"\n";
     ::OutputDebugStringW(line.c_str());
+}
+
+void LogProgress(
+    const std::string_view event,
+    const std::string_view message) noexcept {
+    if (!g_diagnostic_log) {
+        return;
+    }
+    g_diagnostic_log->Write(
+        metaplasia::host::DiagnosticLevel::info,
+        "watchdog",
+        event,
+        "host",
+        ::GetCurrentProcessId(),
+        message);
+}
+
+void InitializeDiagnosticLog() noexcept {
+    auto data_directory = metaplasia::MetaplasiaDataDirectory();
+    if (!data_directory.ok()) {
+        ::OutputDebugStringW(
+            L"[Metaplasia Watchdog] Unable to resolve the diagnostic log directory.\n");
+        return;
+    }
+    try {
+        g_diagnostic_log = std::make_unique<metaplasia::host::DiagnosticLog>(
+            data_directory.value() / L"logs",
+            metaplasia::host::DiagnosticLog::kDefaultMaximumBytes,
+            metaplasia::host::DiagnosticLog::kDefaultBackupCount,
+            L"watchdog.log");
+    } catch (...) {
+        ::OutputDebugStringW(
+            L"[Metaplasia Watchdog] Unable to initialize diagnostic logging.\n");
+    }
 }
 
 bool PathsEqualIgnoreCase(
@@ -187,7 +238,9 @@ Result<RecoveryReport> Recover(const LaunchArguments& arguments) {
     const auto save = settings_store.Save(metaplasia::host::HostSettings{});
     report.settings_reset = save.ok();
     if (!save.ok()) {
-        Log("Unable to persist safe-mode settings: " + save.status().message());
+        Log(
+            "Unable to persist safe-mode settings: " + save.status().message(),
+            "recovery-settings-failed");
     }
 
     auto processes = metaplasia::platform::EnumerateProcesses();
@@ -228,7 +281,8 @@ Result<RecoveryReport> Recover(const LaunchArguments& arguments) {
                 ++report.failed_agents;
                 Log(
                     "Unable to inspect a running shell process: " +
-                    loaded.status().message());
+                        loaded.status().message(),
+                    "recovery-inspection-failed");
             }
             continue;
         }
@@ -250,7 +304,8 @@ Result<RecoveryReport> Recover(const LaunchArguments& arguments) {
             ++report.failed_agents;
             Log(
                 "Unable to deactivate a loaded agent: " +
-                deactivated.status().message());
+                    deactivated.status().message(),
+                "recovery-deactivation-failed");
             continue;
         }
         ++report.deactivated_agents;
@@ -270,6 +325,9 @@ Result<RecoveryReport> Recover(const LaunchArguments& arguments) {
 }
 
 int Run(const int argc, wchar_t* argv[]) {
+    InitializeDiagnosticLog();
+    LogProgress("startup", "Watchdog startup began");
+
     std::vector<std::wstring_view> raw_arguments;
     if (argc > 1) {
         raw_arguments.reserve(static_cast<std::size_t>(argc - 1));
@@ -279,29 +337,32 @@ int Run(const int argc, wchar_t* argv[]) {
     }
     auto parsed = metaplasia::watchdog::ParseLaunchArguments(raw_arguments);
     if (!parsed.ok()) {
-        Log(parsed.status().message());
+        Log(parsed.status().message(), "startup-arguments-invalid");
         return 10;
     }
+    LogProgress("arguments-validated", "Launch arguments were validated");
     auto arguments = std::move(parsed).value();
     auto paths_valid = ValidatePaths(arguments);
     if (!paths_valid.ok()) {
-        Log(paths_valid.status().message());
+        Log(paths_valid.status().message(), "startup-path-validation-failed");
         return 11;
     }
+    LogProgress("paths-validated", "Portable paths were validated");
 
     UniqueHandle host_process(::OpenProcess(
         SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
         FALSE,
         arguments.host_process_id));
     if (!host_process) {
-        Log("Unable to open the host process");
+        Log("Unable to open the host process", "startup-host-open-failed");
         return 12;
     }
     auto host_valid = ValidateHostProcess(host_process.get(), arguments);
     if (!host_valid.ok()) {
-        Log(host_valid.status().message());
+        Log(host_valid.status().message(), "startup-host-validation-failed");
         return 13;
     }
+    LogProgress("host-validated", "Host process identity was validated");
 
     const auto recovery_mutex_name =
         metaplasia::watchdog::RecoveryMutexName(arguments.session_id);
@@ -309,13 +370,20 @@ int Run(const int argc, wchar_t* argv[]) {
         ::CreateMutexW(nullptr, TRUE, recovery_mutex_name.c_str()));
     const DWORD recovery_mutex_error = ::GetLastError();
     if (recovery_mutex.get() == nullptr) {
-        Log("Unable to create the recovery mutex");
+        Log(
+            "Unable to create the recovery mutex",
+            "startup-recovery-lease-failed");
         return 14;
     }
     if (recovery_mutex_error == ERROR_ALREADY_EXISTS) {
-        Log("Another watchdog already owns the recovery lease");
+        Log(
+            "Another watchdog already owns the recovery lease",
+            "startup-recovery-lease-conflict");
         return 15;
     }
+    LogProgress(
+        "recovery-lease-acquired",
+        "Exclusive recovery lease was acquired");
 
     UniqueHandle graceful_event(::OpenEventW(
         SYNCHRONIZE,
@@ -326,13 +394,18 @@ int Run(const int argc, wchar_t* argv[]) {
         FALSE,
         arguments.ready_event_name.c_str()));
     if (!graceful_event || !ready_event) {
-        Log("Unable to open watchdog handshake events");
+        Log(
+            "Unable to open watchdog handshake events",
+            "startup-handshake-open-failed");
         return 16;
     }
     if (!::SetEvent(ready_event.get())) {
-        Log("Unable to signal watchdog readiness");
+        Log(
+            "Unable to signal watchdog readiness",
+            "startup-ready-signal-failed");
         return 17;
     }
+    LogProgress("ready", "Watchdog readiness was signaled to the host");
 
     const std::array<HANDLE, 2> wait_handles{
         graceful_event.get(),
@@ -346,7 +419,7 @@ int Run(const int argc, wchar_t* argv[]) {
         return 0;
     }
     if (wait != WAIT_OBJECT_0 + 1U) {
-        Log("Watchdog wait failed");
+        Log("Watchdog wait failed", "runtime-wait-failed");
         return 18;
     }
 
@@ -354,13 +427,17 @@ int Run(const int argc, wchar_t* argv[]) {
     if (::WaitForSingleObject(graceful_event.get(), 0) == WAIT_OBJECT_0) {
         return 0;
     }
-    Log("Host exited unexpectedly; entering safe mode");
+    Log(
+        "Host exited unexpectedly; entering safe mode",
+        "recovery-started",
+        metaplasia::host::DiagnosticLevel::warning);
     auto recovery = Recover(arguments);
     if (!recovery.ok()) {
-        Log(recovery.status().message());
+        Log(recovery.status().message(), "recovery-failed");
         return 20;
     }
-    Log(
+    LogProgress(
+        "recovery-completed",
         "Recovery completed; deactivated " +
         std::to_string(recovery.value().deactivated_agents) +
         " loaded agent(s)");
@@ -373,10 +450,12 @@ int wmain(const int argc, wchar_t* argv[]) {
     try {
         return Run(argc, argv);
     } catch (const std::exception& exception) {
-        Log(std::string("Unhandled watchdog exception: ") + exception.what());
+        Log(
+            std::string("Unhandled watchdog exception: ") + exception.what(),
+            "unhandled-exception");
         return 30;
     } catch (...) {
-        Log("Unknown watchdog exception");
+        Log("Unknown watchdog exception", "unhandled-exception");
         return 31;
     }
 }

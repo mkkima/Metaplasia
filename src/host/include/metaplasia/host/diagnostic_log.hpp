@@ -22,7 +22,8 @@ public:
     explicit DiagnosticLog(
         std::filesystem::path directory,
         std::size_t maximum_bytes = kDefaultMaximumBytes,
-        std::size_t backup_count = kDefaultBackupCount) noexcept;
+        std::size_t backup_count = kDefaultBackupCount,
+        std::filesystem::path file_name = L"host.log") noexcept;
 
     DiagnosticLog(const DiagnosticLog&) = delete;
     DiagnosticLog& operator=(const DiagnosticLog&) = delete;

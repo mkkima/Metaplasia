@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const LOG_SCHEMA_VERSION: u32 = 1;
-const MAXIMUM_LOG_FILES: usize = 4;
+const MAXIMUM_LOG_FILES: usize = 8;
 const MAXIMUM_FILE_READ_BYTES: u64 = 1024 * 1024 + 16 * 1024;
 const MAXIMUM_RETURNED_ENTRIES: usize = 500;
 const MAXIMUM_FIELD_BYTES: usize = 128;
@@ -95,6 +95,11 @@ fn read_diagnostic_logs_from(directory: &Path) -> Result<DiagnosticLogBatch, Str
         }
     }
 
+    // Host and watchdog write separate files to avoid cross-process rotation
+    // races. Their schema uses fixed-width UTC timestamps, so lexical ordering
+    // reconstructs one stable runtime timeline for the UI.
+    entries.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+
     if entries.len() > MAXIMUM_RETURNED_ENTRIES {
         const KEEP: usize = MAXIMUM_RETURNED_ENTRIES;
         entries.drain(0..entries.len() - KEEP);
@@ -135,6 +140,10 @@ fn ordered_log_paths(directory: &Path) -> [PathBuf; MAXIMUM_LOG_FILES] {
         directory.join("host.log.2"),
         directory.join("host.log.1"),
         directory.join("host.log"),
+        directory.join("watchdog.log.3"),
+        directory.join("watchdog.log.2"),
+        directory.join("watchdog.log.1"),
+        directory.join("watchdog.log"),
     ]
 }
 
@@ -216,6 +225,42 @@ mod tests {
         assert_eq!(batch.entries.len(), 1);
         assert_eq!(batch.entries[0].event, "newest");
         assert_eq!(batch.entries[0].message, "newest complete entry");
+
+        std::fs::remove_dir_all(directory).expect("remove test log directory");
+    }
+
+    #[test]
+    fn merges_host_and_watchdog_logs_into_one_timeline() {
+        let directory = std::env::temp_dir().join(format!(
+            "MetaplasiaDiagnosticsMerge-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after the Unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).expect("create test log directory");
+        std::fs::write(
+            directory.join("host.log"),
+            concat!(
+                r#"{"schema":1,"timestamp":"2026-08-07T12:34:57.000Z","level":"info","component":"host","event":"monitor-started","target":"host","processId":1,"message":"monitor"}"#,
+                "\n"
+            ),
+        )
+        .expect("write host log");
+        std::fs::write(
+            directory.join("watchdog.log"),
+            concat!(
+                r#"{"schema":1,"timestamp":"2026-08-07T12:34:56.000Z","level":"info","component":"watchdog","event":"ready","target":"host","processId":2,"message":"ready"}"#,
+                "\n"
+            ),
+        )
+        .expect("write watchdog log");
+
+        let batch = read_diagnostic_logs_from(&directory).expect("merge runtime logs");
+        assert_eq!(batch.entries.len(), 2);
+        assert_eq!(batch.entries[0].component, "watchdog");
+        assert_eq!(batch.entries[1].component, "host");
 
         std::fs::remove_dir_all(directory).expect("remove test log directory");
     }

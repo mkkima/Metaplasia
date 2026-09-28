@@ -37,7 +37,10 @@ BOOL WINAPI ConsoleHandler(const DWORD signal) {
 
 int Run() {
     using namespace metaplasia;
-    constexpr auto watchdog_startup_timeout = std::chrono::seconds(5);
+    // Cold portable starts can be delayed by Defender while it scans the
+    // newly copied watchdog binary. Keep the handshake bounded, but allow
+    // enough time for that first launch on supported Windows 11 systems.
+    constexpr auto watchdog_startup_timeout = std::chrono::seconds(15);
     constexpr auto previous_recovery_timeout = std::chrono::seconds(15);
 
     auto session = CurrentSessionId();

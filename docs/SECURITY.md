@@ -98,15 +98,19 @@ identified.
 
 - Taskbar, File Explorer, and Start are certified only for exact compatibility
   profiles; broad Windows-build coverage remains incomplete.
-- The compiled compatibility catalog currently approves only two exact Windows
-  11 25H2 revisions (`26200.8875` and `26200.9168`). A clean multi-build VM
-  matrix remains required for broad production support.
+- The compiled compatibility catalog has complete profiles for two exact
+  Windows 11 25H2 revisions (`26200.8875` and `26200.9168`) and a Start-only
+  profile for `26200.8037`. A clean multi-build VM matrix remains required for
+  broad production support.
 - The Start menu adapter currently supports only the `Windows.UI.Xaml` tree,
-  the `VisualDiagConnection1` endpoint, and three exact root type identities. A
-  WinUI 3-only or redesigned Start menu is unsupported and must fail closed.
-- Start menu compatibility has not yet been certified across a clean Windows
-  11 VM build matrix. Live testing on a shell already modified by another
-  injector is explicitly unsupported.
+  the `VisualDiagConnection1` through `VisualDiagConnection4` endpoint set, and
+  three exact root type identities. A WinUI 3-only or redesigned Start menu is
+  unsupported and must fail closed.
+- Start and its three-panel scene have passed the clean isolated Windows 11 VM
+  workflow on exact revision `26200.8037`, including restart, rollback, and
+  post-reboot cleanliness. That is one certified point, not a multi-build
+  matrix. Live testing on a shell already modified by another injector remains
+  explicitly unsupported.
 - Watchdog deactivation is bounded and best effort. If a live shell process
   cannot accept an empty configuration, persistent settings still remain in
   safe mode; the next host retries deactivation, and restarting that shell

@@ -111,6 +111,11 @@ readiness handshake. Native C++ and Rust/Tauri builds statically link their
 Microsoft C/C++ runtime dependency, so the five-file application stays portable
 and does not require a separately installed Visual C++ Redistributable.
 
+Live Start menu changes must also pass the isolated Windows 11 Hyper-V workflow
+before release. It reuses the identity-checked ISeeYou clean VM while keeping
+Metaplasia packages, guest state, settings, and results in separate namespaces.
+See [Windows 11 end-to-end validation](docs/WINDOWS_E2E.md).
+
 ## Run
 
 Start the control center; it starts the per-session host automatically:

@@ -125,7 +125,8 @@ StartMenuLayoutRule IdentifyStartMenuLayoutRule(
     if (target != protocol::AgentTarget::start_menu) {
         return StartMenuLayoutRule::none;
     }
-    if (type_name == L"StartMenu.StartBlendedFlexFrame" &&
+    if ((type_name == L"StartMenu.StartBlendedFlexFrame" ||
+         type_name == L"StartDocked.StartSizingFrame") &&
         element_name.empty()) {
         return StartMenuLayoutRule::frame;
     }
@@ -135,12 +136,18 @@ StartMenuLayoutRule IdentifyStartMenuLayoutRule(
          element_name == L"MainMenu")) {
         return StartMenuLayoutRule::frame_container;
     }
+    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"RootContent") {
+        return StartMenuLayoutRule::legacy_frame_container;
+    }
     if (type_name == L"Windows.UI.Xaml.Controls.Border" &&
         element_name == L"StartDropShadow") {
         return StartMenuLayoutRule::frame_shadow;
     }
-    if (type_name == L"StartMenu.SearchBoxToggleButton" &&
-        element_name == L"SearchBoxToggleButton") {
+    if ((type_name == L"StartMenu.SearchBoxToggleButton" &&
+         element_name == L"SearchBoxToggleButton") ||
+        (type_name == L"StartDocked.SearchBoxToggleButton" &&
+         element_name == L"StartMenuSearchBox")) {
         return StartMenuLayoutRule::search_box;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
@@ -148,7 +155,8 @@ StartMenuLayoutRule IdentifyStartMenuLayoutRule(
         return StartMenuLayoutRule::navigation_pane;
     }
     if (type_name == L"StartDocked.NavigationPaneView" &&
-        element_name == L"UserControl") {
+        (element_name == L"UserControl" ||
+         element_name == L"NavigationPane")) {
         return StartMenuLayoutRule::navigation_content;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
@@ -163,8 +171,10 @@ StartMenuLayoutRule IdentifyStartMenuLayoutRule(
     // current Windows 11 builds. Moving or resizing it removes the pinned
     // section from the centre panel. The independent All apps panel is built
     // by the XAML adapter instead, so this native container must stay intact.
-    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
-        element_name == L"PinnedListHeaderGrid") {
+    if ((type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+         element_name == L"PinnedListHeaderGrid") ||
+        (type_name == L"Windows.UI.Xaml.Controls.TextBlock" &&
+         element_name == L"PinnedListHeaderText")) {
         return StartMenuLayoutRule::pinned_heading;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
@@ -176,7 +186,8 @@ StartMenuLayoutRule IdentifyStartMenuLayoutRule(
         return StartMenuLayoutRule::pinned_list;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
-        element_name == L"TopLevelSuggestionsRoot") {
+        (element_name == L"TopLevelSuggestionsRoot" ||
+         element_name == L"TopLevelSuggestionsContainer")) {
         return StartMenuLayoutRule::recommended;
     }
     return StartMenuLayoutRule::none;
@@ -188,6 +199,7 @@ ShellElementLayout StartMenuLayoutFor(
     switch (rule) {
         case StartMenuLayoutRule::frame:
         case StartMenuLayoutRule::frame_container:
+        case StartMenuLayoutRule::legacy_frame_container:
             layout.width = kStartMenuThreePanelFrameWidth;
             layout.height = kStartMenuThreePanelFrameHeight;
             layout.horizontal_alignment = ShellHorizontalAlignment::center;
@@ -1032,6 +1044,19 @@ HRESULT ShellXamlStyle::ApplyStartMenuLayout(
     if (element.start_menu_layout_rule == StartMenuLayoutRule::none) {
         return S_OK;
     }
+    const auto scene_contract = start_menu_layout_.scene_contract;
+    if ((element.start_menu_layout_rule ==
+             StartMenuLayoutRule::legacy_frame_container &&
+         scene_contract !=
+             StartMenuLayoutRelation::SceneContract::sizing_frame) ||
+        (element.start_menu_layout_rule ==
+             StartMenuLayoutRule::frame_container &&
+         scene_contract !=
+             StartMenuLayoutRelation::SceneContract::blended_frame)) {
+        return accessor_.RestoreElementLayout(
+            element.handle,
+            element.original_element_layout);
+    }
     const bool layout_enabled =
         enabled && target_ == protocol::AgentTarget::start_menu &&
         start_menu_three_panel_layout_enabled_.load(
@@ -1134,34 +1159,70 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
             }
         }
     };
-    if (type_name == L"StartMenu.StartBlendedFlexFrame" &&
-        element_name.empty()) {
+    const auto select_main_surface = [&]() {
+        std::uint64_t selected = 0;
+        switch (start_menu_layout_.scene_contract) {
+            case StartMenuLayoutRelation::SceneContract::blended_frame:
+                selected =
+                    start_menu_layout_.blended_main_menu_candidate;
+                break;
+            case StartMenuLayoutRelation::SceneContract::sizing_frame:
+                selected =
+                    start_menu_layout_.sizing_main_menu_candidate;
+                break;
+            case StartMenuLayoutRelation::SceneContract::unknown:
+            default:
+                break;
+        }
+        if (start_menu_layout_.main_menu_handle == selected) {
+            resolve_main_surface();
+            return;
+        }
+        if (start_menu_layout_.main_menu_handle != 0) {
+            ReleaseStartMenuSceneSnapshots(true);
+        }
+        start_menu_layout_.main_menu_handle = selected;
+        ResetStartMenuSceneRetryState();
+        resolve_main_surface();
+    };
+    const bool is_blended_frame =
+        type_name == L"StartMenu.StartBlendedFlexFrame" &&
+        element_name.empty();
+    const bool is_sizing_frame =
+        type_name == L"StartDocked.StartSizingFrame" &&
+        element_name.empty();
+    if (is_blended_frame || is_sizing_frame) {
+        const auto contract = is_blended_frame
+            ? StartMenuLayoutRelation::SceneContract::blended_frame
+            : StartMenuLayoutRelation::SceneContract::sizing_frame;
         const bool dependency_changed =
-            start_menu_layout_.frame_handle != handle;
+            start_menu_layout_.frame_handle != handle ||
+            start_menu_layout_.scene_contract != contract;
         if (start_menu_layout_.frame_handle != 0 &&
-            start_menu_layout_.frame_handle != handle) {
+            dependency_changed) {
             ReleaseStartMenuSceneSnapshots(true);
         }
         start_menu_layout_.frame_handle = handle;
+        start_menu_layout_.scene_contract = contract;
+        select_main_surface();
         if (dependency_changed) {
             ResetStartMenuSceneRetryState();
         }
         PublishStartMenuSceneDependencies();
         return S_OK;
     }
-    if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
-        element_name == L"MainMenu") {
-        const bool dependency_changed =
-            start_menu_layout_.main_menu_handle != handle;
-        if (start_menu_layout_.main_menu_handle != 0 &&
-            start_menu_layout_.main_menu_handle != handle) {
-            ReleaseStartMenuSceneSnapshots(true);
-        }
-        start_menu_layout_.main_menu_handle = handle;
-        if (dependency_changed) {
-            ResetStartMenuSceneRetryState();
-        }
-        resolve_main_surface();
+    const bool is_blended_main_menu =
+        type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"MainMenu";
+    const bool is_sizing_main_menu =
+        type_name == L"Windows.UI.Xaml.Controls.Grid" &&
+        element_name == L"RootContent";
+    if (is_blended_main_menu || is_sizing_main_menu) {
+        auto& candidate = is_blended_main_menu
+            ? start_menu_layout_.blended_main_menu_candidate
+            : start_menu_layout_.sizing_main_menu_candidate;
+        candidate = handle;
+        select_main_surface();
         PublishStartMenuSceneDependencies();
         return S_OK;
     }
@@ -1205,7 +1266,11 @@ HRESULT ShellXamlStyle::ObserveStartMenuLayoutRelation(
         return S_OK;
     }
     if (type_name == L"Windows.UI.Xaml.Controls.Grid" &&
-        element_name == L"TopLevelSuggestionsRoot" && parent_handle != 0) {
+        (element_name == L"TopLevelSuggestionsRoot" ||
+         (start_menu_layout_.scene_contract ==
+              StartMenuLayoutRelation::SceneContract::sizing_frame &&
+          element_name == L"TopLevelSuggestionsContainer")) &&
+        parent_handle != 0) {
         const bool dependency_changed =
             start_menu_layout_.recommended_handle != handle ||
             start_menu_layout_.recommended_parent_handle != parent_handle;
@@ -1639,6 +1704,19 @@ HRESULT ShellXamlStyle::RefreshStartMenuLayout() noexcept {
             }
         }
     }
+    SetStartMenuStyleStatus(
+        protocol::XamlStyleState::applying,
+        protocol::XamlStyleStage::apply_element_layout,
+        S_OK);
+    result = accessor_.ValidateStartMenuThreePanelSurface(
+        start_menu_layout_.panel_surface_snapshot);
+    if (FAILED(result)) {
+        ReleaseStartMenuSceneSnapshots(true);
+        RecordStartMenuStyleFailure(
+            protocol::XamlStyleStage::apply_element_layout,
+            result);
+        return result;
+    }
     RecordStartMenuStyleSuccess();
     return S_OK;
 }
@@ -1662,6 +1740,9 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
         handle == start_menu_layout_.recommended_parent_handle;
     const bool frame_dependency =
         handle == start_menu_layout_.frame_handle;
+    const bool scene_dependency =
+        frame_dependency || surface_dependency || all_apps_dependency ||
+        recommended_dependency;
     if (frame_dependency || surface_dependency || all_apps_dependency ||
         recommended_dependency) {
         ResetStartMenuSceneRetryState();
@@ -1690,6 +1771,15 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
     }
     if (handle == start_menu_layout_.frame_handle) {
         start_menu_layout_.frame_handle = 0;
+        start_menu_layout_.scene_contract =
+            StartMenuLayoutRelation::SceneContract::unknown;
+        start_menu_layout_.main_menu_handle = 0;
+    }
+    if (handle == start_menu_layout_.blended_main_menu_candidate) {
+        start_menu_layout_.blended_main_menu_candidate = 0;
+    }
+    if (handle == start_menu_layout_.sizing_main_menu_candidate) {
+        start_menu_layout_.sizing_main_menu_candidate = 0;
     }
     if (handle == start_menu_layout_.acrylic_border_handle) {
         start_menu_layout_.acrylic_border_handle = 0;
@@ -1721,7 +1811,7 @@ void ShellXamlStyle::ForgetStartMenuLayoutHandle(
         start_menu_layout_.recommended_parent_handle = 0;
     }
     PublishStartMenuSceneDependencies();
-    if (enabled_.load(std::memory_order_acquire) &&
+    if (scene_dependency && enabled_.load(std::memory_order_acquire) &&
         start_menu_three_panel_layout_enabled_.load(
             std::memory_order_acquire) &&
         style_state_.load(std::memory_order_acquire) !=

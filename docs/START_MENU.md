@@ -87,24 +87,28 @@ target. It hides the native search toggle, expands the verified Start frame to
 1246 by 624 device-independent pixels, and creates three rounded panels from
 the native acrylic brush.
 
-The adapter accepts only the current `StartMenu.StartBlendedFlexFrame` visual
-contract and the exact named container chain observed on the certified Windows
-build. Relation checks distinguish the main Start acrylic surfaces from
-same-named companion surfaces before applying the layout. Width, height,
-margin, alignment, grid position, visibility, opacity, original parent, and
-child index are captured before mutation. Disable restores those values in
-dependency order; a failed restoration keeps its snapshot so a later
-configuration pass can retry.
+The adapter accepts two exact scene contracts: the blended frame selects the
+named `MainMenu` container, while the sizing frame selects `RootContent`.
+Relation checks distinguish the main Start acrylic surfaces from same-named
+companion surfaces before applying the layout. The sizing contract additionally
+accepts its observed `TopLevelSuggestionsContainer`; the blended contract uses
+`TopLevelSuggestionsRoot`. Width, height, margin, alignment, grid position,
+visibility, opacity, original parent, and child index are captured before
+mutation. Disable restores those values in dependency order; a failed
+restoration keeps its snapshot so a later configuration pass can retry.
 
-The frame-envelope contract is validated through `Border`,
-`ScrollContentPresenter`, `RootScrollViewer`, and `FullWindowMediaRoot` using
-`VisualTreeHelper.GetParent`. `FrameworkElement.Parent` is a logical-parent API
-and is not used for this check because template boundaries can make it differ
-from the visual tree reported by XAML Diagnostics. Only the first three mutable
-descendants receive the expanded layout; `FullWindowMediaRoot` remains the
-verified, untouched boundary. Root-owned surfaces above it are deliberately
-excluded because `PopupRoot` can be exposed as a sibling root surface rather
-than an ancestor of the Start frame.
+The blended frame-envelope contract requires the exact visual ancestry
+`Border -> ScrollContentPresenter -> RootScrollViewer`; the sizing contract
+requires its exact `Canvas` root. `GetRuntimeClassName` can project the internal
+root scroll viewer through its public `Windows.UI.Xaml.Controls.ScrollViewer`
+base on revision 26200.8037, and that single type/index pair is explicitly
+allowed. `FrameworkElement.Parent` is not used because template boundaries can
+make the logical tree differ from the visual tree. A concrete parent must still
+be an approved `FullWindowMediaRoot` or `Window`. On builds where
+`VisualTreeHelper.GetParent` ends at the verified root surface with
+`ERROR_NOT_FOUND`, the surface is treated as Window-rooted and is validated but
+not resized. This matches XAML Diagnostics, where `FullWindowMediaRoot` and
+`PopupRoot` may be sibling root surfaces rather than ancestors of Start.
 
 The expanded clipping envelope, the three acrylic surfaces, and their injected
 content are committed as one scene. Until the current `MainMenu` is confirmed
@@ -113,7 +117,12 @@ tracked native elements keep their original geometry. A transient attachment
 failure rolls back the complete scene and retries on a later visual-tree event;
 the adapter never leaves a wide inner frame inside the stock narrow popup.
 Replacement frames are ancestry-checked so late removal of an older frame
-cannot tear down the current scene.
+cannot tear down or demote the health state of the current scene. Before
+publishing `active`, the adapter runs `UpdateLayout` on the live main surface
+and verifies the actual frame size, all three panel sizes and offsets, panel
+visibility, and non-zero visible label geometry. A failed geometry check rolls
+back the complete scene and reports `apply-element-layout` rather than exposing
+a false healthy state.
 
 Deterministic contract or property failures are not retried for every unrelated
 visual-tree callback. One failure is retained in diagnostics until the user
@@ -178,8 +187,11 @@ hook.
 
 Automated tests exercise allowlist matching, range validation, duplicate
 events, bounded tracking, write failure, reconfiguration, exact restoration,
-element removal, and the exported TAP COM factory. They do not inject into the
-live Start menu.
+element removal, and the exported TAP COM factory. The separate Windows 11
+Hyper-V E2E harness injects into a disposable live Start menu, requires the
+native live-layout verification, and additionally checks unique UI Automation
+markers when the hidden RDP provider exposes the Start island; see
+[Windows 11 end-to-end validation](WINDOWS_E2E.md).
 
 Before live enablement, test a clean disposable VM snapshot for each supported
 Windows build. Record at least the OS build, `StartDocked.dll` identity, XAML

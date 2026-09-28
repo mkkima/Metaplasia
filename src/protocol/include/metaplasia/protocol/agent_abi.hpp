@@ -128,7 +128,7 @@ inline constexpr char kAgentGetXamlDiagnosticsExport[] =
 
 inline constexpr std::uint32_t kXamlDiagnosticsMagic =
     0x4458504D;  // "MPXD"
-inline constexpr std::uint16_t kXamlDiagnosticsVersion = 2;
+inline constexpr std::uint16_t kXamlDiagnosticsVersion = 3;
 inline constexpr std::size_t kMaximumXamlDiagnosticTypes = 64;
 inline constexpr std::size_t kMaximumXamlDiagnosticTypeNameLength = 127;
 inline constexpr std::size_t kMaximumXamlDiagnosticElements = 128;
@@ -153,6 +153,25 @@ enum class XamlStyleStage : std::uint8_t {
     apply_element_layout,
     apply_element_style,
     rollback_scene,
+};
+
+enum class StartMenuFrameEnvelopeOperation : std::uint8_t {
+    none = 0,
+    resolve_frame,
+    query_frame,
+    initialize_visual_tree,
+    read_frame_type,
+    validate_frame_type,
+    get_parent,
+    read_parent_type,
+    validate_parent_type,
+    query_parent,
+    get_boundary,
+    read_boundary_type,
+    validate_boundary_type,
+    allocate_snapshot,
+    capture_layout,
+    write_layout,
 };
 
 enum XamlSceneDependency : std::uint16_t {
@@ -205,6 +224,11 @@ struct XamlDiagnosticsSnapshot final {
     std::uint32_t style_apply_success_count{0};
     std::uint32_t style_apply_failure_count{0};
     std::uint32_t style_status_sequence{0};
+    StartMenuFrameEnvelopeOperation frame_envelope_failure_operation{
+        StartMenuFrameEnvelopeOperation::none};
+    std::uint8_t frame_envelope_failure_index{0xffU};
+    std::uint16_t reserved2{0};
+    std::uint32_t frame_envelope_failure_native_error{0};
     XamlTypeDiagnostic types[kMaximumXamlDiagnosticTypes]{};
     XamlElementDiagnostic elements[kMaximumXamlDiagnosticElements]{};
 };

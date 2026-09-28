@@ -14,6 +14,7 @@
 #include <windows.ui.core.h>
 #include <windows.storage.streams.h>
 #include <windows.ui.xaml.h>
+#include <windows.ui.xaml.automation.h>
 #include <windows.ui.xaml.controls.h>
 #include <windows.ui.xaml.controls.primitives.h>
 #include <windows.ui.xaml.media.h>
@@ -35,6 +36,7 @@
 #include <limits>
 #include <new>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -60,6 +62,8 @@ using XamlHorizontalAlignment =
     ABI::Windows::UI::Xaml::HorizontalAlignment;
 using XamlVerticalAlignment =
     ABI::Windows::UI::Xaml::VerticalAlignment;
+using XamlAutomationPropertiesStatics =
+    ABI::Windows::UI::Xaml::Automation::IAutomationPropertiesStatics;
 using XamlBorder = ABI::Windows::UI::Xaml::Controls::IBorder;
 using XamlControl7 = ABI::Windows::UI::Xaml::Controls::IControl7;
 using XamlPanel = ABI::Windows::UI::Xaml::Controls::IPanel;
@@ -106,6 +110,20 @@ constexpr std::size_t kStartMenuAppIconByteCount =
     static_cast<std::size_t>(kStartMenuAppIconSize) *
     static_cast<std::size_t>(kStartMenuAppIconSize) * 4U;
 
+[[nodiscard]] bool IsStartMenuEnvelopeDiagnosticType(
+    const std::wstring_view type_name) noexcept {
+    constexpr std::array<std::wstring_view, 7> types{
+        L"Windows.UI.Xaml.PopupRoot",
+        L"Windows.UI.Xaml.FullWindowMediaRoot",
+        L"Windows.UI.Xaml.Controls.Canvas",
+        L"Windows.UI.Xaml.Controls.Border",
+        L"Windows.UI.Xaml.Controls.ScrollContentPresenter",
+        L"Windows.UI.Xaml.Internal.RootScrollViewer",
+        L"Windows.UI.Xaml.Controls.ScrollViewer",
+    };
+    return std::ranges::find(types, type_name) != types.end();
+}
+
 struct TaskbarCapsuleOutlineSnapshot final {
     double width{0.0};
     double height{0.0};
@@ -136,16 +154,19 @@ struct ElementLayoutSnapshot final {
 };
 
 struct StartMenuFrameEnvelopeSnapshot final {
-    // FullWindowMediaRoot is the verified outer boundary. Windows owns the
-    // root surfaces above it, so only the three descendants participate in
-    // the snapshot and in reversible layout mutations.
+    // Windows owns the verified root boundary, so only the descendants between
+    // the active frame contract and that boundary participate in reversible
+    // layout mutations.
     std::array<ComPtr<FrameworkElement>, 3> elements;
     std::array<ElementLayoutSnapshot, 3> layouts;
+    std::size_t element_count{0};
     bool restored{false};
 };
 
 struct StartMenuThreePanelSurfaceSnapshot final {
     ComPtr<XamlUiElementVector> children;
+    ComPtr<FrameworkElement> main_menu_framework_element;
+    ComPtr<UiElement> main_menu_ui_element;
     ComPtr<XamlBorder> acrylic_border;
     ComPtr<UiElement> acrylic_border_element;
     ComPtr<UiElement> acrylic_overlay_element;
@@ -939,21 +960,78 @@ public:
         const std::uint64_t frame_handle,
         std::uint64_t& snapshot) noexcept override {
         snapshot = 0;
+        SetStartMenuFrameEnvelopeFailure(
+            protocol::StartMenuFrameEnvelopeOperation::none,
+            0xffU,
+            S_OK);
+        const auto fail = [this](
+                              const protocol::StartMenuFrameEnvelopeOperation
+                                  operation,
+                              const std::uint8_t index,
+                              const HRESULT error) noexcept {
+            SetStartMenuFrameEnvelopeFailure(operation, index, error);
+            return error;
+        };
         ComPtr<IInspectable> frame_inspectable;
         HRESULT result = ResolveInspectable(frame_handle, frame_inspectable);
+        if (FAILED(result)) {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::resolve_frame,
+                0xffU,
+                result);
+        }
         ComPtr<DependencyObject> current;
         ComPtr<XamlVisualTreeHelperStatics> visual_tree;
-        if (FAILED(result) ||
-            FAILED(result = frame_inspectable.As(&current)) ||
-            FAILED(result = GetVisualTreeHelperStatics(visual_tree))) {
-            return result;
+        if (FAILED(result = frame_inspectable.As(&current))) {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::query_frame,
+                0xffU,
+                result);
+        }
+        if (FAILED(result = GetVisualTreeHelperStatics(visual_tree))) {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::
+                    initialize_visual_tree,
+                0xffU,
+                result);
         }
 
-        constexpr std::array<std::wstring_view, 4> expected_types{
+        std::wstring_view frame_type;
+        Microsoft::WRL::Wrappers::HString frame_type_storage;
+        if (FAILED(result = ReadRuntimeClassName(
+                       current.Get(),
+                       frame_type_storage,
+                       frame_type))) {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::read_frame_type,
+                0xffU,
+                result);
+        }
+        constexpr std::array<std::wstring_view, 3> blended_types{
             L"Windows.UI.Xaml.Controls.Border",
             L"Windows.UI.Xaml.Controls.ScrollContentPresenter",
-            L"Windows.UI.Xaml.Internal.RootScrollViewer",
-            L"Windows.UI.Xaml.FullWindowMediaRoot"};
+            L"Windows.UI.Xaml.Internal.RootScrollViewer"};
+        constexpr std::array<std::wstring_view, 1> sizing_types{
+            L"Windows.UI.Xaml.Controls.Canvas"};
+        constexpr std::array<std::wstring_view, 2> blended_boundaries{
+            L"Windows.UI.Xaml.FullWindowMediaRoot",
+            L"Windows.UI.Xaml.Window"};
+        constexpr std::array<std::wstring_view, 1> sizing_boundaries{
+            L"Windows.UI.Xaml.Window"};
+        std::span<const std::wstring_view> expected_types;
+        std::span<const std::wstring_view> expected_boundaries;
+        if (frame_type == L"StartMenu.StartBlendedFlexFrame") {
+            expected_types = blended_types;
+            expected_boundaries = blended_boundaries;
+        } else if (frame_type == L"StartDocked.StartSizingFrame") {
+            expected_types = sizing_types;
+            expected_boundaries = sizing_boundaries;
+        } else {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::validate_frame_type,
+                0xffU,
+                HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+        }
         std::array<ComPtr<FrameworkElement>, 3> elements;
         for (std::size_t index = 0; index < expected_types.size(); ++index) {
             ComPtr<DependencyObject> parent;
@@ -961,7 +1039,10 @@ public:
                 current.Get(),
                 parent.GetAddressOf());
             if (FAILED(result) || parent == nullptr) {
-                return FAILED(result) ? result : E_NOTFOUND;
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::get_parent,
+                    static_cast<std::uint8_t>(index),
+                    FAILED(result) ? result : E_NOTFOUND);
             }
             std::wstring_view runtime_name;
             Microsoft::WRL::Wrappers::HString runtime_name_storage;
@@ -970,40 +1051,111 @@ public:
                 runtime_name_storage,
                 runtime_name);
             if (FAILED(result)) {
-                return result;
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::read_parent_type,
+                    static_cast<std::uint8_t>(index),
+                    result);
             }
-            if (runtime_name != expected_types[index]) {
-                return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+            const bool projected_root_scroll_viewer =
+                frame_type == L"StartMenu.StartBlendedFlexFrame" &&
+                index == 2U &&
+                runtime_name == L"Windows.UI.Xaml.Controls.ScrollViewer";
+            if (runtime_name != expected_types[index] &&
+                !projected_root_scroll_viewer) {
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::
+                        validate_parent_type,
+                    static_cast<std::uint8_t>(index),
+                    HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
             }
             ComPtr<FrameworkElement> parent_element;
             if (FAILED(result = parent.As(&parent_element))) {
-                return result;
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::query_parent,
+                    static_cast<std::uint8_t>(index),
+                    result);
             }
             if (index < elements.size()) {
                 elements[index] = parent_element;
             }
             current = std::move(parent);
         }
+        ComPtr<DependencyObject> boundary;
+        result = visual_tree->GetParent(
+            current.Get(),
+            boundary.GetAddressOf());
+        const bool detached_visual_root =
+            result == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ||
+            (SUCCEEDED(result) && boundary == nullptr);
+        if (FAILED(result) && !detached_visual_root) {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::get_boundary,
+                0xffU,
+                result);
+        }
+        // RootScrollViewer and the legacy sizing Canvas are visual roots on
+        // some certified Windows builds. VisualTreeHelper intentionally stops
+        // there even though XAML Diagnostics reports the owning Window as the
+        // parent. Treat only that exact end-of-tree result as a Window-rooted
+        // contract; every concrete parent remains subject to the allow-list.
+        std::wstring_view boundary_name = L"Windows.UI.Xaml.Window";
+        Microsoft::WRL::Wrappers::HString boundary_name_storage;
+        if (!detached_visual_root) {
+            if (FAILED(result = ReadRuntimeClassName(
+                           boundary.Get(),
+                           boundary_name_storage,
+                           boundary_name))) {
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::
+                        read_boundary_type,
+                    0xffU,
+                    result);
+            }
+        }
+        if (std::ranges::find(expected_boundaries, boundary_name) ==
+            expected_boundaries.end()) {
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::
+                    validate_boundary_type,
+                0xffU,
+                HRESULT_FROM_WIN32(ERROR_INVALID_DATA));
+        }
+        // In the Window-rooted contract, RootScrollViewer and Canvas are
+        // Windows-owned root surfaces. They prove the exact visual ancestry
+        // and their descendants are managed by that root layout. The fixed
+        // geometry is applied to the Start frame and its internal container,
+        // not to this system-owned envelope.
+        const std::size_t mutable_count =
+            boundary_name == L"Windows.UI.Xaml.Window"
+            ? 0U
+            : expected_types.size();
 
         auto* captured =
             new (std::nothrow) StartMenuFrameEnvelopeSnapshot();
         if (captured == nullptr) {
-            return E_OUTOFMEMORY;
+            return fail(
+                protocol::StartMenuFrameEnvelopeOperation::allocate_snapshot,
+                0xffU,
+                E_OUTOFMEMORY);
         }
         captured->elements = std::move(elements);
-        for (std::size_t index = 0; index < captured->elements.size(); ++index) {
+        captured->element_count = mutable_count;
+        for (std::size_t index = 0; index < captured->element_count; ++index) {
             result = CaptureFrameworkElementLayout(
                 captured->elements[index].Get(),
                 captured->layouts[index]);
             if (FAILED(result)) {
                 delete captured;
-                return result;
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::capture_layout,
+                    static_cast<std::uint8_t>(index),
+                    result);
             }
         }
 
         const ShellElementLayout layout =
             StartMenuLayoutFor(StartMenuLayoutRule::frame);
-        for (std::size_t remaining = captured->elements.size();
+        for (std::size_t remaining = captured->element_count;
              remaining > 0;
              --remaining) {
             result = WriteFrameworkElementLayout(
@@ -1012,7 +1164,10 @@ public:
             if (FAILED(result)) {
                 static_cast<void>(CleanupStartMenuFrameEnvelope(captured));
                 delete captured;
-                return result;
+                return fail(
+                    protocol::StartMenuFrameEnvelopeOperation::write_layout,
+                    static_cast<std::uint8_t>(remaining - 1U),
+                    result);
             }
         }
         snapshot = reinterpret_cast<std::uint64_t>(captured);
@@ -1067,6 +1222,10 @@ public:
         ComPtr<XamlPanel> main_menu;
         ComPtr<XamlBrush> panel_background;
         if (FAILED(result = main_menu_inspectable.As(&main_menu)) ||
+            FAILED(result = main_menu_inspectable.As(
+                       &captured->main_menu_framework_element)) ||
+            FAILED(result = main_menu_inspectable.As(
+                       &captured->main_menu_ui_element)) ||
             FAILED(result = acrylic_border_inspectable.As(
                        &captured->acrylic_border)) ||
             FAILED(result = acrylic_border_inspectable.As(
@@ -1088,10 +1247,18 @@ public:
         ComPtr<XamlBrush> outline;
         result = CreateSolidColorBrush(0x4DFFFFFFU, outline);
         ComPtr<XamlBrush> label_foreground;
+        ComPtr<XamlAutomationPropertiesStatics> automation_properties;
+        Microsoft::WRL::Wrappers::HStringReference automation_class(
+            RuntimeClass_Windows_UI_Xaml_Automation_AutomationProperties);
         if (FAILED(result) ||
             FAILED(result = CreateSolidColorBrush(
                        0xFFFFFFFFU,
-                       label_foreground))) {
+                       label_foreground)) ||
+            FAILED(result = ::RoGetActivationFactory(
+                       automation_class.Get(),
+                       __uuidof(XamlAutomationPropertiesStatics),
+                       reinterpret_cast<void**>(
+                           automation_properties.GetAddressOf())))) {
             delete captured;
             return result;
         }
@@ -1240,6 +1407,9 @@ public:
                 constexpr std::array<std::wstring_view, 2> labels{
                     L"Все приложения",
                     L"Рекомендуемые"};
+                constexpr std::array<std::wstring_view, 2> automation_ids{
+                    L"MetaplasiaThreePanelAllApps",
+                    L"MetaplasiaThreePanelRecommended"};
                 ComPtr<IInspectable> label_inspectable;
                 Microsoft::WRL::Wrappers::HStringReference label_class(
                     RuntimeClass_Windows_UI_Xaml_Controls_TextBlock);
@@ -1248,16 +1418,24 @@ public:
                     label_inspectable.GetAddressOf());
                 ComPtr<XamlTextBlock> label;
                 ComPtr<FrameworkElement> label_element;
+                ComPtr<DependencyObject> label_dependency_object;
                 Microsoft::WRL::Wrappers::HStringReference label_text(
                     labels[label_index].data());
+                Microsoft::WRL::Wrappers::HStringReference automation_id(
+                    automation_ids[label_index].data());
                 if (FAILED(result) ||
                     FAILED(result = label_inspectable.As(&label)) ||
                     FAILED(result = label_inspectable.As(&label_element)) ||
+                    FAILED(result = label_inspectable.As(
+                               &label_dependency_object)) ||
                     FAILED(result = label_inspectable.As(
                                &captured->panel_labels[label_index])) ||
                     FAILED(result = captured->panel_labels[label_index]
                                         ->put_IsHitTestVisible(false)) ||
                     FAILED(result = label->put_Text(label_text.Get())) ||
+                    FAILED(result = automation_properties->SetAutomationId(
+                               label_dependency_object.Get(),
+                               automation_id.Get())) ||
                     FAILED(result = label->put_FontSize(15.0)) ||
                     FAILED(result = label->put_Foreground(
                                label_foreground.Get())) ||
@@ -1325,6 +1503,98 @@ public:
         for (const auto& panel_surface : captured->panel_outlines) {
             if (FAILED(result = panel_surface->put_Fill(background.Get()))) {
                 return result;
+            }
+        }
+        return S_OK;
+    }
+
+    [[nodiscard]] HRESULT ValidateStartMenuThreePanelSurface(
+        const std::uint64_t snapshot) noexcept override {
+        if (snapshot == 0) {
+            return E_INVALIDARG;
+        }
+        auto* captured = reinterpret_cast<
+            StartMenuThreePanelSurfaceSnapshot*>(snapshot);
+        if (captured->restored || captured->main_menu_ui_element == nullptr ||
+            captured->main_menu_framework_element == nullptr) {
+            return E_UNEXPECTED;
+        }
+
+        HRESULT result = captured->main_menu_ui_element->UpdateLayout();
+        if (FAILED(result)) {
+            return result;
+        }
+        const auto is_near = [](const double value, const double expected) {
+            return std::isfinite(value) &&
+                   std::abs(value - expected) <= 1.0;
+        };
+        double main_width = 0.0;
+        double main_height = 0.0;
+        if (FAILED(result = captured->main_menu_framework_element
+                                ->get_ActualWidth(&main_width)) ||
+            FAILED(result = captured->main_menu_framework_element
+                                ->get_ActualHeight(&main_height))) {
+            return result;
+        }
+        if (!is_near(main_width, kStartMenuThreePanelFrameWidth) ||
+            !is_near(main_height, kStartMenuThreePanelFrameHeight)) {
+            return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+        }
+
+        constexpr std::array<double, 3> widths{320.0, 530.0, 320.0};
+        constexpr std::array<double, 3> left_offsets{30.0, 358.0, 896.0};
+        constexpr double horizontal_render_inset = 2.0;
+        constexpr double horizontal_host_expansion =
+            horizontal_render_inset * 2.0;
+        for (std::size_t index = 0;
+             index < captured->panel_elements.size();
+             ++index) {
+            ComPtr<FrameworkElement> panel;
+            if (FAILED(result = captured->panel_elements[index].As(&panel))) {
+                return result;
+            }
+            double actual_width = 0.0;
+            double actual_height = 0.0;
+            XamlThickness margin{};
+            XamlVisibility visibility{};
+            if (FAILED(result = panel->get_ActualWidth(&actual_width)) ||
+                FAILED(result = panel->get_ActualHeight(&actual_height)) ||
+                FAILED(result = panel->get_Margin(&margin)) ||
+                FAILED(result = captured->panel_elements[index]
+                                    ->get_Visibility(&visibility))) {
+                return result;
+            }
+            if (!is_near(
+                    actual_width,
+                    widths[index] + horizontal_host_expansion) ||
+                !is_near(actual_height, kStartMenuThreePanelPanelHeight) ||
+                !is_near(
+                    margin.Left,
+                    left_offsets[index] - horizontal_render_inset) ||
+                !is_near(margin.Top, kStartMenuThreePanelTopInset) ||
+                visibility !=
+                    ABI::Windows::UI::Xaml::Visibility_Visible) {
+                return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+            }
+        }
+
+        for (const auto& label_element : captured->panel_labels) {
+            ComPtr<FrameworkElement> label;
+            XamlVisibility visibility{};
+            double actual_width = 0.0;
+            double actual_height = 0.0;
+            if (label_element == nullptr ||
+                FAILED(result = label_element.As(&label)) ||
+                FAILED(result = label->get_ActualWidth(&actual_width)) ||
+                FAILED(result = label->get_ActualHeight(&actual_height)) ||
+                FAILED(result = label_element->get_Visibility(&visibility))) {
+                return label_element == nullptr ? E_NOTFOUND : result;
+            }
+            if (!std::isfinite(actual_width) || actual_width <= 0.0 ||
+                !std::isfinite(actual_height) || actual_height <= 0.0 ||
+                visibility !=
+                    ABI::Windows::UI::Xaml::Visibility_Visible) {
+                return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
             }
         }
         return S_OK;
@@ -1873,7 +2143,31 @@ public:
         return inspectable.As(&dispatcher);
     }
 
+    void CopyStartMenuFrameEnvelopeDiagnostics(
+        protocol::XamlDiagnosticsSnapshot& snapshot) const noexcept {
+        snapshot.frame_envelope_failure_operation =
+            frame_envelope_failure_operation_.load(std::memory_order_acquire);
+        snapshot.frame_envelope_failure_index =
+            frame_envelope_failure_index_.load(std::memory_order_acquire);
+        snapshot.frame_envelope_failure_native_error =
+            frame_envelope_failure_native_error_.load(
+                std::memory_order_acquire);
+    }
+
 private:
+    void SetStartMenuFrameEnvelopeFailure(
+        const protocol::StartMenuFrameEnvelopeOperation operation,
+        const std::uint8_t index,
+        const HRESULT error) noexcept {
+        frame_envelope_failure_native_error_.store(
+            static_cast<std::uint32_t>(error),
+            std::memory_order_release);
+        frame_envelope_failure_index_.store(index, std::memory_order_release);
+        frame_envelope_failure_operation_.store(
+            operation,
+            std::memory_order_release);
+    }
+
     [[nodiscard]] static std::optional<XamlHorizontalAlignment>
     ToXamlHorizontalAlignment(
         const ShellHorizontalAlignment alignment) noexcept {
@@ -2059,7 +2353,7 @@ private:
             return S_OK;
         }
         HRESULT first_failure = S_OK;
-        for (std::size_t index = 0; index < captured->elements.size(); ++index) {
+        for (std::size_t index = 0; index < captured->element_count; ++index) {
             const HRESULT restore_result = RestoreFrameworkElementLayout(
                 captured->elements[index].Get(),
                 captured->layouts[index]);
@@ -2898,6 +3192,11 @@ private:
     }
 
     ComPtr<IXamlDiagnostics> diagnostics_;
+    std::atomic<protocol::StartMenuFrameEnvelopeOperation>
+        frame_envelope_failure_operation_{
+            protocol::StartMenuFrameEnvelopeOperation::none};
+    std::atomic<std::uint8_t> frame_envelope_failure_index_{0xffU};
+    std::atomic<std::uint32_t> frame_envelope_failure_native_error_{0};
 };
 
 class VisualTreeWatcher final
@@ -2965,6 +3264,7 @@ public:
         copy.tracked_element_count = static_cast<std::uint32_t>(
             style_.tracked_count());
         style_.CopyRuntimeDiagnostics(copy);
+        accessor_.CopyStartMenuFrameEnvelopeDiagnostics(copy);
         std::copy_n(
             diagnostic_types_.begin(),
             diagnostic_type_count_,
@@ -3077,7 +3377,9 @@ private:
         const bool framework_type =
             type_name.starts_with(L"Windows.UI.Xaml.") ||
             type_name.starts_with(L"Windows.UI.Composition.");
-        if (name_length == 0 && framework_type) {
+        if (name_length == 0 && framework_type &&
+            (target_ != protocol::AgentTarget::start_menu ||
+             !IsStartMenuEnvelopeDiagnosticType(type_name))) {
             ::ReleaseSRWLockExclusive(&diagnostics_lock_);
             return;
         }

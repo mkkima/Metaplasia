@@ -86,11 +86,30 @@ Result<std::filesystem::path> WindowsDirectory() {
 }
 
 const std::vector<CompatibilityProfile>& CompiledProfiles() {
-    // This first profile was captured and live-tested on Windows 11 25H2,
-    // 10.0.26200.8875 x64. An update must add a new profile after the complete
+    // These profiles were captured and live-tested on exact Windows 11 25H2
+    // revisions. An update must add a new profile after the complete
     // enable/disable/crash-recovery matrix passes; broad build ranges are
     // intentionally forbidden.
     static const std::vector<CompatibilityProfile> profiles{
+        {
+            "win11-25h2-26200.8037-x64-start-xaml-v1",
+            AdapterId::start_menu_xaml,
+            {10, 0, 26200, 8037},
+            {
+                {
+                    L"StartMenuExperienceHost.exe",
+                    L"SystemApps\\Microsoft.Windows.StartMenuExperienceHost_"
+                    L"cw5n1h2txyewy\\StartMenuExperienceHost.exe",
+                    "8664-E9F0EBBF-00039000-0003F92F-"
+                    "startmenuexperiencehost.pdb-"
+                    "E9B7C11B7F8739CF2A473A250B21BBAC1"},
+                {
+                    L"Windows.UI.Xaml.dll",
+                    L"System32\\Windows.UI.Xaml.dll",
+                    "8664-B1A577D7-01107000-0110FC8D-"
+                    "windows.ui.xaml.pdb-"
+                    "7C54C06C4F1540D83D16CEECE9E509711"},
+            }},
         {
             "win11-25h2-26200.8875-x64-taskbar-v1",
             AdapterId::taskbar_clock,
