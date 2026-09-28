@@ -41,7 +41,7 @@ function Get-ProjectVersion {
     $version = $Matches.version
 
     $cargo = Get-Content -LiteralPath (Join-Path $Root 'src-tauri\Cargo.toml') -Raw
-    if ($cargo -notmatch '(?m)^version = "(?<version>[0-9]+\.[0-9]+\.[0-9]+)"$') {
+    if ($cargo -notmatch '(?m)^version = "(?<version>[0-9]+\.[0-9]+\.[0-9]+)"\r?$') {
         throw 'Could not read the Cargo package version.'
     }
     $cargoVersion = $Matches.version
