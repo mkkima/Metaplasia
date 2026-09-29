@@ -268,6 +268,30 @@ const std::vector<CompatibilityProfile>& CompiledProfiles() {
                     "windows.ui.xaml.pdb-"
                     "B7398E0107885525880FA8C45B816A161"},
             }},
+#ifndef NDEBUG
+        // Validated with the development runtime in the exact-image Windows
+        // 26200.9457 lab: visible panels, reconfiguration, disable and restart.
+        // Release/Authenticode runtime certification remains separate.
+        {
+            "win11-25h2-26200.9457-x64-start-xaml-v1",
+            AdapterId::start_menu_xaml,
+            {10, 0, 26200, 9457},
+            {
+                {
+                    L"StartMenuExperienceHost.exe",
+                    L"SystemApps\\Microsoft.Windows.StartMenuExperienceHost_"
+                    L"cw5n1h2txyewy\\StartMenuExperienceHost.exe",
+                    "8664-AD5D99E7-00038000-00037F3D-"
+                    "startmenuexperiencehost.pdb-"
+                    "03FA474EDDD8E1EABEA626A7B633DC7E1"},
+                {
+                    L"Windows.UI.Xaml.dll",
+                    L"System32\\Windows.UI.Xaml.dll",
+                    "8664-8139C357-01120000-0112BEC1-"
+                    "windows.ui.xaml.pdb-"
+                    "2A7B381FC8C25B7402BAD032E0603FB31"},
+            }},
+#endif
     };
     return profiles;
 }

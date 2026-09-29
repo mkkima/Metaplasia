@@ -2,6 +2,8 @@
 param(
     [string]$SourceLabRoot = 'C:\workspace\ISeeYou',
     [string]$PackageRoot,
+    [string]$WindowsUpdatePath,
+    [switch]$VisibleVM,
     [switch]$KeepFailedVM
 )
 
@@ -50,6 +52,53 @@ $networkState = $null
 $rdpProcess = $null
 $rdpReadyPath = $null
 $rdpStopPath = $null
+$targetFingerprintPath = $null
+$baselineOwned = $false
+$guestPackageStaged = $false
+$preparedCheckpoint = $null
+$preparedStatePath = Join-Path $repositoryRoot 'out\e2e\prepared-baseline.json'
+$preparedFingerprintPath = Join-Path $repositoryRoot 'out\e2e\prepared-target-fingerprint.json'
+
+function Invoke-MetaplasiaPowerShellDirect {
+    param(
+        [Parameter(Mandatory)][string]$VMName,
+        [Parameter(Mandatory)][PSCredential]$Credential,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @(),
+        [TimeSpan]$Timeout = [TimeSpan]::FromSeconds(30)
+    )
+    $parameters = @{
+        VMName = $VMName
+        Credential = $Credential
+        ScriptBlock = $ScriptBlock
+        AsJob = $true
+        ErrorAction = 'Stop'
+    }
+    if ($ArgumentList.Count -ne 0) {
+        $parameters.ArgumentList = $ArgumentList
+    }
+    $job = Invoke-Command @parameters
+    try {
+        $completed = Wait-Job -Job $job `
+            -Timeout ([int][Math]::Ceiling($Timeout.TotalSeconds))
+        if ($null -eq $completed) {
+            throw "PowerShell Direct exceeded $($Timeout.TotalSeconds) seconds."
+        }
+        if ($job.State -ne 'Completed') {
+            $reason = $job.ChildJobs[0].JobStateInfo.Reason
+            $detail = if ($null -eq $reason) {
+                "state=$($job.State)"
+            } else { $reason.Message }
+            throw "PowerShell Direct failed: $detail"
+        }
+        return Receive-Job -Job $job -ErrorAction Stop
+    } finally {
+        if ($job.State -in @('NotStarted', 'Running')) {
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+        }
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}
 
 function Wait-MetaplasiaPowerShellDirect {
     param(
@@ -60,8 +109,9 @@ function Wait-MetaplasiaPowerShellDirect {
     $deadline = [DateTime]::UtcNow + $Timeout
     do {
         try {
-            $probe = Invoke-Command -VMName $VMName -Credential $Credential `
-                -ScriptBlock { $env:COMPUTERNAME } -ErrorAction Stop
+            $probe = Invoke-MetaplasiaPowerShellDirect -VMName $VMName `
+                -Credential $Credential -ScriptBlock { $env:COMPUTERNAME } `
+                -Timeout ([TimeSpan]::FromSeconds(20))
             if ($probe) { return }
         } catch {
             Start-Sleep -Seconds 4
@@ -100,8 +150,9 @@ function Stop-MetaplasiaVmSafely {
     }
     if ($current.State -eq 'Off') { return }
     try {
-        Invoke-Command -VMName $VMName -Credential $Credential `
-            -ScriptBlock { Stop-Computer -Force } -ErrorAction SilentlyContinue
+        Invoke-MetaplasiaPowerShellDirect -VMName $VMName `
+            -Credential $Credential -ScriptBlock { Stop-Computer -Force } `
+            -Timeout ([TimeSpan]::FromSeconds(30))
     } catch {
         Write-Verbose "Guest shutdown command disconnected: $_"
     }
@@ -208,8 +259,8 @@ function New-MetaplasiaValidatedBaselineCheckpoint {
         $started = $true
         Wait-MetaplasiaPowerShellDirect -VMName $vmName `
             -Credential $Credential
-        $evidence = Invoke-Command -VMName $vmName -Credential $Credential `
-            -ScriptBlock {
+        $evidence = Invoke-MetaplasiaPowerShellDirect -VMName $vmName `
+            -Credential $Credential -ScriptBlock {
             Set-StrictMode -Version Latest
             $ErrorActionPreference = 'Stop'
 
@@ -325,7 +376,7 @@ function New-MetaplasiaValidatedBaselineCheckpoint {
                 testSigningDisabled = $true
                 verifierProjectTargetsAbsent = $true
             }
-        }
+        } -Timeout ([TimeSpan]::FromMinutes(2))
     } finally {
         if ($started) {
             Stop-MetaplasiaVmSafely -VMName $vmName `
@@ -487,14 +538,16 @@ function Start-MetaplasiaHiddenRdp {
         '-CredentialPath', ('"{0}"' -f $CredentialPath),
         '-ReadyPath', ('"{0}"' -f $ReadyPath),
         '-StopPath', ('"{0}"' -f $StopPath)
-    ) -join ' '
+    )
+    if ($VisibleVM) { $arguments += '-VisibleVM' }
+    $arguments = $arguments -join ' '
     $process = Start-Process -FilePath $windowsPowerShell `
         -ArgumentList $arguments -WindowStyle Hidden -PassThru
     try {
         $deadline = [DateTime]::UtcNow.AddSeconds(90)
         do {
             if (Test-Path -LiteralPath $ReadyPath) {
-                $ready = Get-Content -LiteralPath $ReadyPath -Raw |
+                $ready = Get-Content -LiteralPath $ReadyPath -Encoding utf8 -Raw |
                     ConvertFrom-Json
                 if (-not $ready.success -or -not $ready.connected) {
                     throw "The hidden RDP helper failed: $($ready.error)"
@@ -666,6 +719,8 @@ function Assert-MetaplasiaHostPackage {
         'bin\metaplasia-cli.exe',
         'bin\metaplasia-agent.dll',
         'guest\MetaplasiaE2E.Common.ps1',
+        'guest\Get-MetaplasiaCompatibilityFingerprint.ps1',
+        'guest\Compare-MetaplasiaCompatibilityFingerprint.ps1',
         'guest\Install-MetaplasiaE2E.ps1',
         'guest\Run-MetaplasiaE2EWorkload.ps1',
         'guest\Invoke-MetaplasiaE2EWorkload.ps1',
@@ -774,6 +829,13 @@ try {
         Out-Null
     $transcriptStarted = $true
 
+    $targetFingerprintPath = Join-Path $resultRoot `
+        'target-compatibility-fingerprint.json'
+    & (Join-Path $PSScriptRoot `
+        'guest\Get-MetaplasiaCompatibilityFingerprint.ps1') `
+        -CliPath (Join-Path $PackageRoot 'bin\metaplasia-cli.exe') `
+        -OutputPath $targetFingerprintPath | Out-Null
+
     $vm = Get-VM -Name $vmName -ErrorAction Stop
     if ($vm.Generation -ne 2 -or [string]$state.vmId -ne $vm.Id.Guid) {
         throw 'The VM does not match the read-only ISeeYou provisioning state.'
@@ -800,9 +862,32 @@ try {
         throw 'The shared VM must remain disconnected from virtual switches.'
     }
     $checkpoints = @(Get-MetaplasiaVmSnapshots -VMName $vmName)
-    if ($checkpoints.Count -gt 1 -or
-        ($checkpoints.Count -eq 1 -and
-            $checkpoints[0].Name -cne $baselineName)) {
+    $originalCheckpoints = @($checkpoints | Where-Object Name -CEQ $baselineName)
+    if (Test-Path -LiteralPath $preparedStatePath) {
+        $prepared = Get-Content -LiteralPath $preparedStatePath -Raw | ConvertFrom-Json
+        if ($prepared.schema -ne 2 -or $prepared.project -cne 'Metaplasia' -or
+            $prepared.verification -cne 'windows-serviced-only' -or
+            [string]$prepared.vmId -cne $vm.Id.ToString() -or
+            $originalCheckpoints.Count -ne 1 -or
+            [string]$prepared.originalCheckpointId -cne $originalCheckpoints[0].Id.ToString() -or
+            [string]$prepared.checkpointName -notmatch '^Metaplasia-Windows-[0-9]+\.[0-9]+$' -or
+            (Get-FileHash -LiteralPath $preparedFingerprintPath -Algorithm SHA256).Hash -cne
+                [string]$prepared.targetFingerprintSha256) {
+            throw 'The prepared Windows checkpoint does not match this VM and original baseline.'
+        }
+        & (Join-Path $PSScriptRoot 'guest\Compare-MetaplasiaCompatibilityFingerprint.ps1') `
+            -ExpectedPath $preparedFingerprintPath -ActualPath $targetFingerprintPath `
+            -PreparationTargetOnly | Out-Null
+        $preparedMatches = @($checkpoints | Where-Object {
+            $_.Id.ToString() -ceq [string]$prepared.checkpointId -and
+            $_.Name -ceq [string]$prepared.checkpointName
+        })
+        if ($preparedMatches.Count -ne 1) { throw 'The prepared Windows checkpoint is missing.' }
+        $preparedCheckpoint = $preparedMatches[0]
+    }
+    $expectedCount = if ($null -ne $preparedCheckpoint) { 2 } else { 1 }
+    if ($checkpoints.Count -gt $expectedCount -or $originalCheckpoints.Count -gt 1 -or
+        ($checkpoints.Count -ne 0 -and $originalCheckpoints.Count -ne 1)) {
         throw 'The shared VM has an ambiguous or foreign checkpoint set.'
     }
     if ($checkpoints.Count -eq 0) {
@@ -814,12 +899,70 @@ try {
                 'baseline-recovery-clean-state.json') -Encoding utf8
         $baselineRecreated = $true
     } else {
-        $checkpoint = $checkpoints[0]
+        $checkpoint = $originalCheckpoints[0]
     }
 
-    Restore-VMSnapshot -VMSnapshot $checkpoint -Confirm:$false
+    $baselineOwned = $true
+    $testCheckpoint = if ($null -ne $preparedCheckpoint) { $preparedCheckpoint } else { $checkpoint }
+    Restore-VMSnapshot -VMSnapshot $testCheckpoint -Confirm:$false
+    if ($WindowsUpdatePath -and $null -eq $preparedCheckpoint) {
+        $freeMemory = [long](Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1KB
+        if ($freeMemory -lt 6GB) { throw 'Servicing requires 6 GiB of free host RAM.' }
+        $storageDrive = [IO.Path]::GetPathRoot($expectedVhd).TrimEnd('\').TrimEnd(':')
+        if ((Get-PSDrive -Name $storageDrive).Free -lt 30GB) {
+            throw 'Servicing requires 30 GiB free on the existing VM storage drive.'
+        }
+        Set-VMMemory -VMName $vmName -DynamicMemoryEnabled $false -StartupBytes 4GB
+    }
     Start-MetaplasiaVm -VMName $vmName -ExpectedId $vm.Id
     Wait-MetaplasiaPowerShellDirect -VMName $vmName -Credential $credential
+    if ($WindowsUpdatePath -and $null -eq $preparedCheckpoint) {
+        & (Join-Path $PSScriptRoot 'Initialize-MetaplasiaWindowsBaseline.ps1') `
+            -VMName $vmName -ExpectedId $vm.Id -Credential $credential `
+            -UpdatePath $WindowsUpdatePath `
+            -TargetFingerprintPath $targetFingerprintPath -ResultRoot $resultRoot
+        Stop-MetaplasiaVmSafely -VMName $vmName -ExpectedId $vm.Id -Credential $credential
+        $preparedName = 'Metaplasia-Windows-26200.9457'
+        Checkpoint-VM -Name $vmName -SnapshotName $preparedName -Confirm:$false
+        $created = @(Get-VMSnapshot -VMName $vmName -Name $preparedName)
+        if ($created.Count -ne 1) { throw 'The prepared checkpoint was not uniquely created.' }
+        $preparedCheckpoint = $created[0]
+        # This records the intended host target, NOT a verified guest match.
+        # Every run still compares the guest's loaded modules after logon.
+        Copy-Item -LiteralPath $targetFingerprintPath -Destination $preparedFingerprintPath
+        $prepared = [ordered]@{
+            schema = 2; project = 'Metaplasia'; vmId = $vm.Id.ToString()
+            verification = 'windows-serviced-only'
+            originalCheckpointId = $checkpoint.Id.ToString()
+            checkpointId = $preparedCheckpoint.Id.ToString(); checkpointName = $preparedName
+            targetFingerprintSha256 = (Get-FileHash -LiteralPath $preparedFingerprintPath -Algorithm SHA256).Hash
+        }
+        $pendingStatePath = $preparedStatePath + '.pending'
+        $prepared | ConvertTo-Json | Set-Content -LiteralPath $pendingStatePath -Encoding utf8
+        Move-Item -LiteralPath $pendingStatePath -Destination $preparedStatePath
+        Start-MetaplasiaVm -VMName $vmName -ExpectedId $vm.Id
+        Wait-MetaplasiaPowerShellDirect -VMName $vmName -Credential $credential
+    }
+    # Reject the wrong Windows revision before copying or installing anything.
+    # The interactive workload also compares every relevant shell binary hash.
+    $guestVersion = Invoke-MetaplasiaPowerShellDirect -VMName $vmName `
+        -Credential $credential -ScriptBlock {
+            $os = Get-ItemProperty -LiteralPath `
+                'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+            "10.0.$($os.CurrentBuildNumber).$($os.UBR)"
+        }
+    $hostVersion = Get-ItemProperty -LiteralPath `
+        'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+    $expectedVersion = "10.0.$($hostVersion.CurrentBuildNumber).$($hostVersion.UBR)"
+    [ordered]@{
+        expected = $expectedVersion
+        actual = [string]$guestVersion
+        matches = [string]$guestVersion -ceq $expectedVersion
+    } | ConvertTo-Json | Set-Content -LiteralPath (
+        Join-Path $resultRoot 'windows-version-preflight.json') -Encoding utf8
+    if ([string]$guestVersion -cne $expectedVersion) {
+        throw "Windows version mismatch: guest=$guestVersion, host=$expectedVersion. No installation or injection was attempted."
+    }
     $session = New-PSSession -VMName $vmName -Credential $credential
     $networkState = New-MetaplasiaIsolatedNetwork -VMName $vmName `
         -ExpectedId $vm.Id
@@ -833,6 +976,7 @@ try {
     }
     Copy-Item -ToSession $session -Path (Join-Path $PackageRoot '*') `
         -Destination 'C:\MetaplasiaLab\package' -Recurse -Force
+    $guestPackageStaged = $true
 
     $install = Invoke-Command -Session $session `
         -ArgumentList ([string]$networkState.guestAddress) -ScriptBlock {
@@ -852,6 +996,10 @@ try {
             param([string]$ResultRoot)
             New-Item -ItemType Directory -Path $ResultRoot -Force | Out-Null
         }
+    $guestExpectedCompatibilityPath = Join-Path $guestResultRoot `
+        'expected-compatibility-fingerprint.json'
+    Copy-Item -ToSession $session -LiteralPath $targetFingerprintPath `
+        -Destination $guestExpectedCompatibilityPath -Force
     $securePassword = $credential.Password
     $interactivePreflight = Invoke-Command -Session $session `
         -ArgumentList $guestUser, $securePassword `
@@ -929,12 +1077,14 @@ public static class MetaplasiaLogonProbe {
     $taskName = 'Metaplasia-E2E-' + [Guid]::NewGuid().ToString('N')
     $expectedUserSid = [string]$interactivePreflight.userSid
     Invoke-Command -Session $session -ArgumentList @(
-        $taskName, $guestUser, $expectedUserSid, $guestResultRoot) -ScriptBlock {
+        $taskName, $guestUser, $expectedUserSid, $guestResultRoot,
+        $guestExpectedCompatibilityPath) -ScriptBlock {
         param(
             [string]$TaskName,
             [string]$UserName,
             [string]$ExpectedUserSid,
-            [string]$ResultRoot
+            [string]$ResultRoot,
+            [string]$ExpectedCompatibilityPath
         )
         $installRoot = 'C:\MetaplasiaLab\install'
         $installAcl = Get-Acl -LiteralPath $installRoot
@@ -962,10 +1112,12 @@ public static class MetaplasiaLogonProbe {
         $powerShell = Join-Path $env:SystemRoot `
             'System32\WindowsPowerShell\v1.0\powershell.exe'
         $arguments = @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-NoProfile', '-MTA', '-ExecutionPolicy', 'Bypass',
             '-File', '"C:\MetaplasiaLab\package\guest\Run-MetaplasiaE2EWorkload.ps1"',
             '-ResultRoot', ('"{0}"' -f $ResultRoot),
-            '-ExpectedUserSid', ('"{0}"' -f $ExpectedUserSid)
+            '-ExpectedUserSid', ('"{0}"' -f $ExpectedUserSid),
+            '-ExpectedCompatibilityPath',
+            ('"{0}"' -f $ExpectedCompatibilityPath)
         ) -join ' '
         $action = New-ScheduledTaskAction -Execute $powerShell `
             -Argument $arguments
@@ -1045,8 +1197,11 @@ public static class MetaplasiaLogonProbe {
         $logs = @(
             'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational',
             'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational',
+            'Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational',
             'Microsoft-Windows-User Profile Service/Operational',
-            'Microsoft-Windows-Shell-Core/Operational'
+            'Microsoft-Windows-Shell-Core/Operational',
+            'System',
+            'Application'
         )
         foreach ($log in $logs) {
             $events = @(Get-WinEvent -FilterHashtable @{
@@ -1087,12 +1242,23 @@ public static class MetaplasiaLogonProbe {
         $rdpProcess.Refresh()
     }
     if (-not $taskStart.startedMarker -and $rdpProcess.HasExited) {
-        $sessionEvents = Invoke-Command -Session $session `
-            -ScriptBlock $collectSessionEvents
+        # RDP disconnect notification can precede the guest's logoff event.
+        # Wait for bounded evidence, not a blind reconnect or an immediate fail.
+        $eventDeadline = [DateTime]::UtcNow.AddSeconds(20)
+        do {
+            $sessionEvents = Invoke-Command -Session $session `
+                -ScriptBlock $collectSessionEvents
+            $logoffObserved = @($sessionEvents | Where-Object {
+                    $_.logName -eq 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational' -and
+                    $_.id -eq 23
+                }).Count -ne 0
+            if ($logoffObserved) { break }
+            Start-Sleep -Seconds 2
+        } while ([DateTime]::UtcNow -lt $eventDeadline)
         $sessionEvents | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (
             Join-Path $resultRoot 'guest-oobe-session-events.json') `
             -Encoding utf8
-        $rdpState = Get-Content -LiteralPath $rdpReadyPath -Raw |
+        $rdpState = Get-Content -LiteralPath $rdpReadyPath -Encoding utf8 -Raw |
             ConvertFrom-Json
         $oobeObserved = @($sessionEvents | Where-Object {
                 $_.logName -eq 'Microsoft-Windows-Shell-Core/Operational' -and
@@ -1128,7 +1294,7 @@ public static class MetaplasiaLogonProbe {
             $secondEvents | ConvertTo-Json -Depth 5 | Set-Content `
                 -LiteralPath (Join-Path $resultRoot `
                     'guest-interactive-session-events.json') -Encoding utf8
-            $secondRdpState = Get-Content -LiteralPath $rdpReadyPath -Raw |
+            $secondRdpState = Get-Content -LiteralPath $rdpReadyPath -Encoding utf8 -Raw |
                 ConvertFrom-Json
             throw ('The post-OOBE RDP session ended before the limited ' +
                 "workload started; extendedReason=$($secondRdpState.extendedDisconnectReason); " +
@@ -1303,7 +1469,8 @@ public static class MetaplasiaLogonProbe {
             $rdpProcess = $null
         }
     }
-    if ($null -eq $session -and $null -ne $vm -and
+    if ($baselineOwned -and $guestPackageStaged -and
+        $null -eq $session -and $null -ne $vm -and
         (Get-VM -Name $vmName -ErrorAction SilentlyContinue).State -eq 'Running') {
         try {
             Wait-MetaplasiaPowerShellDirect -VMName $vmName `
@@ -1313,7 +1480,7 @@ public static class MetaplasiaLogonProbe {
             Write-Warning "Unable to reconnect for cleanup: $_"
         }
     }
-    if ($null -ne $session) {
+    if ($guestPackageStaged -and $null -ne $session) {
         try {
             $guestResults = Invoke-Command -Session $session -ScriptBlock {
                 if (Test-Path -LiteralPath 'C:\MetaplasiaLab\results') {
@@ -1377,7 +1544,7 @@ public static class MetaplasiaLogonProbe {
     if (($succeeded -or -not $KeepFailedVM -or
             ($guestSecretStaged -and -not $cleanupVerified) -or
             $null -ne $networkState) -and
-        $null -ne $vm -and $null -ne $checkpoint) {
+        $baselineOwned -and $null -ne $vm -and $null -ne $checkpoint) {
         try {
             Stop-MetaplasiaVmSafely -VMName $vmName -ExpectedId $vm.Id `
                 -Credential $credential
@@ -1404,6 +1571,7 @@ public static class MetaplasiaLogonProbe {
             cleanupVerified = $cleanupVerified
             baselineRecreated = $baselineRecreated
             baselineRestored = $baselineRestored
+            preparedCheckpoint = if ($null -eq $preparedCheckpoint) { $null } else { $preparedCheckpoint.Name }
             isolatedNetworkRemoved = $null -eq $networkState
             error = if ($null -eq $failure) { $null } else {
                 $failure.ToString()

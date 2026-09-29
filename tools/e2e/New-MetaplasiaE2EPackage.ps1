@@ -77,6 +77,8 @@ try {
     }
     foreach ($name in @(
         'MetaplasiaE2E.Common.ps1',
+        'Get-MetaplasiaCompatibilityFingerprint.ps1',
+        'Compare-MetaplasiaCompatibilityFingerprint.ps1',
         'Install-MetaplasiaE2E.ps1',
         'Run-MetaplasiaE2EWorkload.ps1',
         'Invoke-MetaplasiaE2EWorkload.ps1',

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][string]$SourceLabRoot,
+    [string]$SourceLabRoot = 'C:\workspace\ISeeYou',
+    [string]$WindowsUpdatePath,
+    [switch]$VisibleVM,
     [Parameter(Mandatory)][string]$PackageRoot
 )
 
@@ -8,7 +10,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $entryPoint = Join-Path $PSScriptRoot 'Start-MetaplasiaEndToEndLab.ps1'
-$powerShell = (Get-Process -Id $PID).Path
+$powerShell = Join-Path $env:SystemRoot `
+    'System32\WindowsPowerShell\v1.0\powershell.exe'
+if (-not (Test-Path -LiteralPath $powerShell -PathType Leaf)) {
+    throw "Windows PowerShell 5.1 was not found at $powerShell."
+}
 $repositoryRoot = (Resolve-Path -LiteralPath (
         Join-Path $PSScriptRoot '..\..')).Path
 $statusPath = Join-Path $repositoryRoot 'out\e2e\elevation-request.json'
@@ -29,7 +35,12 @@ $arguments = @(
     '-SourceLabRoot', ('"{0}"' -f $SourceLabRoot),
     '-ElevatedStage',
     '-PackageRoot', ('"{0}"' -f $PackageRoot)
-) -join ' '
+)
+if ($VisibleVM) { $arguments += '-VisibleVM' }
+if ($WindowsUpdatePath) {
+    $arguments += @('-WindowsUpdatePath', ('"{0}"' -f ([IO.Path]::GetFullPath($WindowsUpdatePath))))
+}
+$arguments = $arguments -join ' '
 try {
     $process = Start-Process -FilePath $powerShell -Verb RunAs `
         -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru

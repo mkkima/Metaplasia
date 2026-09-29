@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$CredentialPath,
     [Parameter(Mandatory)][string]$ReadyPath,
     [Parameter(Mandatory)][string]$StopPath,
+    [switch]$VisibleVM,
     [int]$MaximumMinutes = 15
 )
 
@@ -48,7 +49,33 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing `
     -TypeDefinition @'
 using System;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+
+public sealed class MetaplasiaRdpForm : Form {
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
+    public bool NativeVisible { get { return IsWindowVisible(Handle); } }
+    public void ShowAuthorizedViewport() {
+        if (!VisibleLabWindow) throw new InvalidOperationException("Visible VM was not requested.");
+        // The helper process starts with SW_HIDE to suppress its console.
+        // Explicitly show this authorized VM form, never any other window.
+        ShowWindow(Handle, 1);
+        Activate();
+        if (!NativeVisible) throw new InvalidOperationException("The VM viewport is not visible.");
+    }
+    public bool VisibleLabWindow { get; set; }
+    // A hidden lab transport must never steal focus from the user's desktop.
+    protected override bool ShowWithoutActivation { get { return !VisibleLabWindow; } }
+    protected override CreateParams CreateParams {
+        get {
+            var parameters = base.CreateParams;
+            if (!VisibleLabWindow)
+                parameters.ExStyle |= 0x08000000 | 0x00000080; // NOACTIVATE | TOOLWINDOW
+            return parameters;
+        }
+    }
+}
 
 public sealed class MetaplasiaRdpAxHost : AxHost {
     public MetaplasiaRdpAxHost()
@@ -67,16 +94,26 @@ $status = [ordered]@{
     connected = $false
     server = $Server
     processId = $PID
+    visibleVM = [bool]$VisibleVM
     error = $null
 }
 try {
-    $form = [Windows.Forms.Form]::new()
-    $form.ShowInTaskbar = $false
-    $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
-    $form.StartPosition = [Windows.Forms.FormStartPosition]::Manual
-    $form.Location = [Drawing.Point]::new(-32000, -32000)
-    $form.Size = [Drawing.Size]::new(1366, 768)
-    $form.Opacity = 0.01
+    $form = [MetaplasiaRdpForm]::new()
+    $form.VisibleLabWindow = [bool]$VisibleVM
+    $form.Text = 'Metaplasia E2E - isolated ISeeYou-Lab VM'
+    $form.ClientSize = [Drawing.Size]::new(1366, 768)
+    if ($VisibleVM) {
+        $form.StartPosition = [Windows.Forms.FormStartPosition]::CenterScreen
+        $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::FixedSingle
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $false
+    } else {
+        $form.ShowInTaskbar = $false
+        $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::None
+        $form.StartPosition = [Windows.Forms.FormStartPosition]::Manual
+        $form.Location = [Drawing.Point]::new(-32000, -32000)
+        $form.Opacity = 0.01
+    }
     $hostControl = [MetaplasiaRdpAxHost]::new()
     $hostControl.Dock = [Windows.Forms.DockStyle]::Fill
     $form.Controls.Add($hostControl)
@@ -111,6 +148,16 @@ try {
     } while ([DateTime]::UtcNow -lt $connectDeadline)
     if ([int]$client.Connected -ne 1) {
         throw 'The isolated hidden RDP session did not connect.'
+    }
+    if ($VisibleVM) {
+        $form.ShowAuthorizedViewport()
+        $hostControl.Select()
+    }
+    $status.viewportVisible = $form.NativeVisible
+    $status.viewportHandle = $form.Handle.ToInt64()
+    $status.viewportBounds = [ordered]@{
+        x = $form.Bounds.X; y = $form.Bounds.Y
+        width = $form.Bounds.Width; height = $form.Bounds.Height
     }
     $status.success = $true
     $status.connected = $true
