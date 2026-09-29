@@ -44,6 +44,11 @@ int main() {
         pipe_name,
         [&handled](const Frame& request) -> metaplasia::Result<Frame> {
             handled.fetch_add(1, std::memory_order_relaxed);
+            if (request.header.kind == MessageKind::set_customization_request) {
+                // Simulate an atomic durable settings flush exceeding the
+                // CLI's former two-second read-only response budget.
+                std::this_thread::sleep_for(2200ms);
+            }
             Frame response;
             response.header.kind = MessageKind::command_response;
             response.header.request_id = request.header.request_id;
@@ -79,9 +84,19 @@ int main() {
             "preserve request id across reconnect");
     }
 
+    Frame persisted_command;
+    persisted_command.header.kind = MessageKind::set_customization_request;
+    persisted_command.header.request_id = transaction_count + 1;
+    auto persisted_response = client.Transact(persisted_command, 15s);
+    Require(persisted_response.ok(), "wait for a delayed durable-write acknowledgement");
+    Require(
+        persisted_response.value().header.request_id == transaction_count + 1,
+        "preserve the delayed mutation request identity");
+    constexpr auto expected_count = transaction_count + 1;
+
     const auto acknowledgement_deadline =
         std::chrono::steady_clock::now() + 2s;
-    while (acknowledged.load(std::memory_order_relaxed) < transaction_count &&
+    while (acknowledged.load(std::memory_order_relaxed) < expected_count &&
            std::chrono::steady_clock::now() < acknowledgement_deadline) {
         std::this_thread::sleep_for(1ms);
     }
@@ -89,10 +104,10 @@ int main() {
     server_thread.join();
     Require(server_status.ok(), "stop named-pipe server cleanly");
     Require(
-        handled.load(std::memory_order_relaxed) == transaction_count,
+        handled.load(std::memory_order_relaxed) == expected_count,
         "handle each acknowledged request exactly once");
     Require(
-        acknowledged.load(std::memory_order_relaxed) == transaction_count,
+        acknowledged.load(std::memory_order_relaxed) == expected_count,
         "observe each transaction only after its acknowledgement");
 
     std::cout << "Named-pipe transaction tests passed\n";

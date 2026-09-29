@@ -55,6 +55,7 @@ $phase = 'startup'
 $failure = $null
 $diagnosticSamples = [Collections.Generic.List[object]]::new()
 $geometrySamples = [Collections.Generic.List[object]]::new()
+$taskbarSamples = [Collections.Generic.List[object]]::new()
 $desktopSamples = [Collections.Generic.List[object]]::new()
 $lastStartXamlText = $null
 $runtimeStarted = $false
@@ -403,6 +404,168 @@ function Wait-MetaplasiaStartState {
     throw "Start did not reach style-state=$Expected within $Seconds seconds."
 }
 
+function Get-MetaplasiaTaskbarGeometry {
+    $desktop = [MetaplasiaDesktopProbe]::DesktopState()
+    $explorer = @(Get-Process explorer -ErrorAction SilentlyContinue |
+        Where-Object SessionId -eq (Get-Process -Id $PID).SessionId)
+    if ($explorer.Count -ne 1 -or $desktop.ShellProcessId -ne $explorer[0].Id -or $desktop.ShellWindow -eq 0) {
+        throw 'The interactive Explorer taskbar is not ready for measurement.'
+    }
+    $roots = @($desktop.ShellWindow) + @([MetaplasiaDesktopProbe]::ChildWindows(
+        $desktop.ShellWindow, [uint32]$explorer[0].Id))
+    $seen = [Collections.Generic.HashSet[string]]::new()
+    $elements = @()
+    foreach ($handle in $roots) {
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$handle)
+        $items = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+        for ($index = 0; $index -lt [Math]::Min($items.Count, 256); ++$index) {
+            $item = $items[$index]
+            if (-not $seen.Add(($item.GetRuntimeId() -join ','))) { continue }
+            $current = $item.Current
+            $rect = $current.BoundingRectangle
+            if ($current.ProcessId -ne $explorer[0].Id -or $current.IsOffscreen -or
+                $rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0) { continue }
+            $elements += [ordered]@{
+                id = $current.AutomationId; class = $current.ClassName; name = $current.Name
+                left = $rect.Left; top = $rect.Top; width = $rect.Width; height = $rect.Height
+                hitProcessId = [MetaplasiaDesktopProbe]::ProcessAtPoint(
+                    [int]($rect.Left + $rect.Width / 2), [int]($rect.Top + $rect.Height / 2))
+            }
+        }
+    }
+    $clock = @($elements | Where-Object class -CEQ 'SystemTray.OmniButtonLeft')
+    $start = @($elements | Where-Object id -CEQ 'StartButton')
+    if ($clock.Count -ne 1 -or $start.Count -ne 1) {
+        $elements | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (
+            Join-Path $ResultRoot 'failure-taskbar-elements.json') -Encoding utf8
+        throw 'Expected one rendered clock and Start button in the guest taskbar.'
+    }
+    return [ordered]@{
+        processId = $explorer[0].Id; screenWidth = $desktop.ScreenWidth; screenHeight = $desktop.ScreenHeight
+        clock = $clock[0]; start = $start[0]; elements = $elements
+        showDesktopCount = @($elements | Where-Object class -CEQ 'SystemTray.ShowDesktopButton').Count
+    }
+}
+
+function Assert-MetaplasiaTaskbarGeometry {
+    param([Parameter(Mandatory)]$Geometry, [Parameter(Mandatory)]$Baseline,
+        [Parameter(Mandatory)][bool]$Capsule, [Parameter(Mandatory)][bool]$HideShowDesktop)
+
+    foreach ($item in @($Geometry.clock, $Geometry.start)) {
+        if ($null -eq $item -or $item.width -le 0 -or $item.height -le 0 -or
+            $item.left -lt 0 -or $item.top -lt 0 -or
+            ($item.left + $item.width) -gt $Geometry.screenWidth -or
+            ($item.top + $item.height) -gt $Geometry.screenHeight -or
+            [uint32]$item.hitProcessId -ne [uint32]$Geometry.processId) {
+            throw 'Taskbar controls are missing, clipped or occluded.'
+        }
+    }
+    if ($Geometry.showDesktopCount -ne $(if ($HideShowDesktop) { 0 } else { 1 })) {
+        throw 'Show Desktop visibility did not follow the requested configuration.'
+    }
+    # With all native tray controls present, capsule mode must move the clock
+    # inward by the existing right margin. Compare bounds, never screenshots.
+    if (-not $HideShowDesktop) {
+        $expectedInset = if ($Capsule) { [Math]::Max(12.0, ($Geometry.screenWidth - 1420.0) / 2.0) } else { 0.0 }
+        $actualInset = ($Baseline.clock.left + $Baseline.clock.width) -
+            ($Geometry.clock.left + $Geometry.clock.width)
+        if ([Math]::Abs($actualInset - $expectedInset) -gt 2.0) {
+            throw "Taskbar capsule/restore geometry mismatch: expected inset=$expectedInset, actual=$actualInset."
+        }
+    }
+}
+
+function Wait-MetaplasiaTaskbar {
+    param([Parameter(Mandatory)]$Baseline, [Parameter(Mandatory)][bool]$Enabled,
+        [bool]$Capsule = $false, [bool]$HideShowDesktop = $false)
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    $lastError = 'No taskbar sample.'
+    $geometry = $null
+    do {
+        try {
+            $snapshot = Invoke-MetaplasiaCli -Arguments @('snapshot')
+            $expectedState = if ($Enabled) { 'active' } else { 'disabled' }
+            $expectedEnabled = $Enabled.ToString().ToLowerInvariant()
+            if ($snapshot.text -notmatch "(?im)^taskbar: $expectedState, enabled=$expectedEnabled,") {
+                throw "Taskbar state not ready: $($snapshot.text)"
+            }
+            $xaml = Invoke-MetaplasiaCli -Arguments @('xaml-types', 'taskbar')
+            $summary = @($xaml.text -split "`r?`n")[0]
+            if ($summary -notmatch 'styled-elements=(\d+)') { throw 'Missing Taskbar XAML tracking count.' }
+            $tracked = [int]$Matches[1]
+            if (($Enabled -and ($tracked -lt 4 -or $xaml.text -notmatch 'name=BackgroundControl')) -or
+                (-not $Enabled -and $tracked -ne 0)) { throw "Taskbar styles were not applied/restored: $summary" }
+            $geometry = Get-MetaplasiaTaskbarGeometry
+            Assert-MetaplasiaTaskbarGeometry -Geometry $geometry -Baseline $Baseline -Capsule $Capsule -HideShowDesktop $HideShowDesktop
+            $taskbarSamples.Add([ordered]@{ phase = $script:phase; enabled = $Enabled; capsule = $Capsule;
+                hideShowDesktop = $HideShowDesktop; summary = $summary; geometry = $geometry })
+            $xaml.text | Set-Content -LiteralPath (Join-Path $ResultRoot 'taskbar-xaml-latest.txt') -Encoding utf8
+            return $geometry
+        } catch { $lastError = $_.Exception.Message }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $taskbarSamples.Add([ordered]@{ phase = $script:phase; error = $lastError; geometry = $geometry })
+    throw "Taskbar did not reach the verified state: $lastError"
+}
+
+function Invoke-MetaplasiaTaskbarWorkload {
+    $script:phase = 'taskbar-baseline'
+    Close-MetaplasiaStart
+    $baseline = Get-MetaplasiaTaskbarGeometry
+    Assert-MetaplasiaTaskbarGeometry -Geometry $baseline -Baseline $baseline -Capsule $false -HideShowDesktop $false
+    $taskbarSamples.Add([ordered]@{ phase = $script:phase; geometry = $baseline })
+    $script:phase = 'taskbar-enable-capsule'
+    foreach ($command in @(
+        @('set', 'taskbar-capsule-enabled', 'true'),
+        @('set', 'taskbar-color-enabled', 'true'),
+        @('set', 'taskbar-color', '#000000'),
+        @('set', 'taskbar-opacity', '100'),
+        @('enable', 'taskbar', '--confirm')
+    )) { [void](Invoke-MetaplasiaCli -Arguments $command) }
+    [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $true)
+    foreach ($iteration in 1..4) {
+        $script:phase = "taskbar-reconfiguration-$iteration"
+        $capsule = ($iteration % 2) -eq 0
+        [void](Invoke-MetaplasiaCli -Arguments @('set', 'taskbar-capsule-enabled', $capsule.ToString().ToLowerInvariant()))
+        [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $capsule)
+        [void](Invoke-MetaplasiaCli -Arguments @('set', 'taskbar-hide-show-desktop', 'true'))
+        [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $capsule -HideShowDesktop $true)
+        [void](Invoke-MetaplasiaCli -Arguments @('set', 'taskbar-hide-show-desktop', 'false'))
+        [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $capsule)
+    }
+    $script:phase = 'taskbar-reversible-disable'
+    [void](Invoke-MetaplasiaCli -Arguments @('disable', 'taskbar'))
+    [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $false)
+    $script:phase = 'taskbar-reenable'
+    [void](Invoke-MetaplasiaCli -Arguments @('enable', 'taskbar', '--confirm'))
+    [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $true)
+    $script:phase = 'taskbar-explorer-restart'
+    # Only the measured guest session's Explorer is stopped. The global VM/SID
+    # guards above forbid this workload on the host or another user's session.
+    Stop-Process -Id $baseline.processId -Force
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    do {
+        Start-Sleep -Milliseconds 750
+        $desktop = [MetaplasiaDesktopProbe]::DesktopState()
+        if ($desktop.ShellProcessId -ne 0 -and $desktop.ShellProcessId -ne $baseline.processId) { break }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($desktop.ShellProcessId -eq 0 -or $desktop.ShellProcessId -eq $baseline.processId) { throw 'Guest Explorer did not restart.' }
+    [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $true)
+    $script:phase = 'taskbar-and-start-coexistence'
+    [void](Invoke-MetaplasiaCli -Arguments @('enable', 'start-menu', '--confirm'))
+    Open-MetaplasiaStart
+    [void](Wait-MetaplasiaStartState -Expected active)
+    $geometry = Get-MetaplasiaStartGeometry
+    $geometrySamples.Add($geometry)
+    Assert-MetaplasiaThreePanelGeometry -Geometry $geometry
+    Close-MetaplasiaStart
+    [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $true -Capsule $true)
+    $script:phase = 'taskbar-final-disable'
+    [void](Invoke-MetaplasiaCli -Arguments @('disable', 'taskbar'))
+    [void](Wait-MetaplasiaTaskbar -Baseline $baseline -Enabled $false)
+}
+
 function Get-MetaplasiaStartGeometry {
     $process = @(Get-Process StartMenuExperienceHost -ErrorAction Stop |
         Where-Object SessionId -eq (Get-Process -Id $PID).SessionId)
@@ -713,7 +876,7 @@ try {
     & (Join-Path $PSScriptRoot `
         'Compare-MetaplasiaCompatibilityFingerprint.ps1') `
         -ExpectedPath $ExpectedCompatibilityPath `
-        -ActualPath $guestFingerprintPath -Target start-menu | Out-Null
+        -ActualPath $guestFingerprintPath -Target shell | Out-Null
 
     $phase = 'launch-background-runtime'
     $application = Join-Path $InstallRoot 'metaplasia.exe'
@@ -794,19 +957,21 @@ try {
     $geometrySamples.Add($geometryAfterRestart)
     Assert-MetaplasiaThreePanelGeometry -Geometry $geometryAfterRestart
 
+    Invoke-MetaplasiaTaskbarWorkload
+
     $phase = 'collect-crash-evidence'
     $crashes = @(Get-WinEvent -FilterHashtable @{
             LogName = 'Application'
             StartTime = $startedUtc.ToLocalTime()
             Id = @(1000, 1001)
         } -ErrorAction SilentlyContinue | Where-Object {
-            $_.Message -match '(?i)metaplasia|StartMenuExperienceHost'
+            $_.Message -match '(?i)metaplasia|StartMenuExperienceHost|explorer\.exe'
         } | Select-Object TimeCreated, Id, ProviderName, Message)
     if ($crashes.Count -ne 0) {
         $crashes | ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath (Join-Path $ResultRoot 'crashes.json') `
                 -Encoding utf8
-        throw 'Application Error or WER recorded a Metaplasia/Start crash during the workload.'
+        throw 'Application Error or WER recorded a Metaplasia/shell crash during the workload.'
     }
 
     $phase = 'final-disable'
@@ -856,6 +1021,9 @@ try {
                 $snapshot = Invoke-MetaplasiaCli -Arguments @('snapshot') -AllowFailure
                 $snapshot.text | Set-Content -LiteralPath (
                     Join-Path $ResultRoot 'failure-target-snapshot.txt') -Encoding utf8
+                $taskbarXaml = Invoke-MetaplasiaCli -Arguments @('xaml-types', 'taskbar') -AllowFailure
+                $taskbarXaml.text | Set-Content -LiteralPath (
+                    Join-Path $ResultRoot 'failure-taskbar-xaml.txt') -Encoding utf8
                 $diagnostics = Invoke-MetaplasiaCli -Arguments @('xaml-types', 'start-menu') -AllowFailure
                 $lastStartXamlText = $diagnostics.text
                 Get-MetaplasiaStartGeometry | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (
@@ -928,6 +1096,8 @@ try {
     $geometrySamples | ConvertTo-Json -Depth 7 |
         Set-Content -LiteralPath (Join-Path $ResultRoot 'geometry-samples.json') `
             -Encoding utf8
+    $taskbarSamples | ConvertTo-Json -Depth 7 |
+        Set-Content -LiteralPath (Join-Path $ResultRoot 'taskbar-samples.json') -Encoding utf8
     $status = [ordered]@{
         success = $null -eq $failure
         phase = $phase

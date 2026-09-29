@@ -1236,10 +1236,25 @@ public static class MetaplasiaLogonProbe {
     $taskStart | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (
         Join-Path $resultRoot 'guest-workload-task-start-oobe.json') `
         -Encoding utf8
+    # Connection readiness precedes first-logon OOBE. Observe either actual
+    # workload startup or disconnect throughout the bounded transition; a
+    # single ten-second exit check can miss a later OOBE logoff entirely.
+    $firstLogonDeadline = [DateTime]::UtcNow.AddSeconds(90)
     $rdpProcess.Refresh()
+    while (-not $taskStart.startedMarker -and -not $rdpProcess.HasExited -and
+        [DateTime]::UtcNow -lt $firstLogonDeadline) {
+        $taskStart.startedMarker = Invoke-Command -Session $session `
+            -ArgumentList $guestStartedPath -ScriptBlock {
+                param([string]$StartedPath)
+                Test-Path -LiteralPath $StartedPath
+            }
+        if (-not $taskStart.startedMarker) {
+            [void]$rdpProcess.WaitForExit(1000)
+            $rdpProcess.Refresh()
+        }
+    }
     if (-not $taskStart.startedMarker -and -not $rdpProcess.HasExited) {
-        [void]$rdpProcess.WaitForExit(10000)
-        $rdpProcess.Refresh()
+        throw 'First logon neither started the workload nor completed OOBE within 90 seconds.'
     }
     if (-not $taskStart.startedMarker -and $rdpProcess.HasExited) {
         # RDP disconnect notification can precede the guest's logoff event.

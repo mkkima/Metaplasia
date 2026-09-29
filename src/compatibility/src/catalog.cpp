@@ -270,6 +270,37 @@ const std::vector<CompatibilityProfile>& CompiledProfiles() {
             }},
 #ifndef NDEBUG
         // Validated with the development runtime in the exact-image Windows
+        // 26200.9457 lab: capsule/tray geometry, restore, Explorer restart and
+        // coexistence with Start. Release runtime certification is separate.
+        {
+            "win11-25h2-26200.9457-x64-taskbar-v1",
+            AdapterId::taskbar_clock,
+            {10, 0, 26200, 9457},
+            {
+                {
+                    L"explorer.exe", L"explorer.exe",
+                    "8664-03F6C974-00338000-0034AB7D-explorer.pdb-"
+                    "C210483522254E320D82BE76F0DFA4E51"},
+                {
+                    L"user32.dll", L"System32\\user32.dll",
+                    "8664-4C25ADA6-001CF000-001E0FBE-user32.pdb-"
+                    "CDB947D1B96B87977915DE04CF54279C1"},
+                {
+                    L"Taskbar.dll", L"System32\\Taskbar.dll",
+                    "8664-8DBF8CD1-00304000-00311500-Taskbar.pdb-"
+                    "483327DB5FAC66CA1D844F9D8F5054CB1"},
+                {
+                    L"Taskbar.View.dll",
+                    L"SystemApps\\MicrosoftWindows.Client.Core_"
+                    L"cw5n1h2txyewy\\Taskbar.View.dll",
+                    "8664-6A726E39-00993000-0098D7F9-Taskbar.View.pdb-"
+                    "1A545A37EB1E419AB835E94A8F18F0771"},
+                {
+                    L"twinui.pcshell.dll", L"System32\\twinui.pcshell.dll",
+                    "8664-F4493743-0099E000-009A1D7A-twinui.pcshell.pdb-"
+                    "09A465FCB1668CB766F6031877BFD6831"},
+            }},
+        // Validated with the development runtime in the exact-image Windows
         // 26200.9457 lab: visible panels, reconfiguration, disable and restart.
         // Release/Authenticode runtime certification remains separate.
         {

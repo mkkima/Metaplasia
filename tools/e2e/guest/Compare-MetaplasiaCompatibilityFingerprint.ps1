@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$ExpectedPath,
     [Parameter(Mandatory)][string]$ActualPath,
-    [ValidateSet('all', 'start-menu')][string]$Target = 'all',
+    [ValidateSet('all', 'start-menu', 'shell')][string]$Target = 'all',
     # A serviced checkpoint records an intended target, not a tested shell.
     # Allow older target metadata here only; workload verification never uses it.
     [switch]$PreparationTargetOnly
@@ -34,7 +34,11 @@ function Get-MetaplasiaCanonicalFingerprint {
                 "operatingSystem.$propertyName=$([string]$properties[0].Value)")
         }
     }
-    $adapterNames = if ($Target -eq 'start-menu') { @('startMenu') } else { @('taskbar', 'fileExplorer', 'startMenu') }
+    $adapterNames = switch ($Target) {
+        'start-menu' { @('startMenu') }
+        'shell' { @('taskbar', 'startMenu') }
+        default { @('taskbar', 'fileExplorer', 'startMenu') }
+    }
     foreach ($adapterName in $adapterNames) {
         $properties = @($Fingerprint.adapters.PSObject.Properties |
             Where-Object { $_.Name -ceq $adapterName })

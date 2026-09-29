@@ -67,11 +67,36 @@ if (Test-Path -LiteralPath $cli) {
     try {
         $ErrorActionPreference = 'Continue'
         & $cli disable start-menu 2>&1 | Out-Null
+        & $cli disable taskbar 2>&1 | Out-Null
     } finally {
         $ErrorActionPreference = $previousPreference
     }
     Start-Sleep -Seconds 2
 }
+# Stop reinjection before restarting an agent-bearing shell. Otherwise the
+# monitor can inject into the replacement Explorer while files are removed.
+$processDeadline = [DateTime]::UtcNow.AddSeconds(15)
+do {
+    $remaining = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.Name -like 'metaplasia*' -and $_.ExecutablePath
+        })
+    foreach ($process in $remaining) {
+        $path = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
+        if (-not $path.StartsWith(
+                [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') + '\',
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to stop a foreign Metaplasia process: $path"
+        }
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    }
+    if ($remaining.Count -ne 0) { Start-Sleep -Milliseconds 500 }
+} while ($remaining.Count -ne 0 -and
+    [DateTime]::UtcNow -lt $processDeadline)
+if (@(Get-Process -Name 'metaplasia*' -ErrorAction SilentlyContinue).Count `
+        -ne 0) {
+    throw 'Metaplasia processes did not terminate during uninstall.'
+}
+
 $agentPath = [IO.Path]::GetFullPath(
     (Join-Path $InstallRoot 'metaplasia-agent.dll'))
 $shellProcessesRestarted = [Collections.Generic.List[uint32]]::new()
@@ -109,28 +134,6 @@ if ($shellProcessesRestarted.Count -ne 0) {
         throw 'A shell process retaining the Metaplasia agent did not exit.'
     }
 }
-$processDeadline = [DateTime]::UtcNow.AddSeconds(15)
-do {
-    $remaining = @(Get-CimInstance Win32_Process | Where-Object {
-            $_.Name -like 'metaplasia*' -and $_.ExecutablePath
-        })
-    foreach ($process in $remaining) {
-        $path = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
-        if (-not $path.StartsWith(
-                [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') + '\',
-                [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Refusing to stop a foreign Metaplasia process: $path"
-        }
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-    }
-    if ($remaining.Count -ne 0) { Start-Sleep -Milliseconds 500 }
-} while ($remaining.Count -ne 0 -and
-    [DateTime]::UtcNow -lt $processDeadline)
-if (@(Get-Process -Name 'metaplasia*' -ErrorAction SilentlyContinue).Count `
-        -ne 0) {
-    throw 'Metaplasia processes did not terminate during uninstall.'
-}
-
 $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 if (Test-Path -LiteralPath $runPath) {
     Remove-ItemProperty -LiteralPath $runPath -Name 'Metaplasia' `

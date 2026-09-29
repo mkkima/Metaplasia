@@ -1724,7 +1724,8 @@ EngineController::CompatibilityState EngineController::EvaluateCompatibility(
             evaluated.detail = decision.value().detail;
             diagnostic_level = evaluated.supported
                 ? DiagnosticLevel::info
-                : DiagnosticLevel::warning;
+                : (evaluated.retry_soon ? DiagnosticLevel::warning
+                                        : DiagnosticLevel::error);
             diagnostic_event = evaluated.supported
                 ? "profile-approved"
                 : "profile-rejected";

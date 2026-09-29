@@ -39,10 +39,11 @@ writes ISeeYou packages, results, guest files, or `vm-state.json`.
   This saves repeated Windows installations without creating another VM.
 - Before injection, the interactive guest also compares the host fingerprint:
   display version, installation type, build/UBR, BuildLabEx, architecture, and
-  each Start module's path, PE/PDB key, SHA-256, and length.
-  This workload enables only Start, so lazy-loaded Explorer-only modules are
-  recorded but do not gate Start testing. The comparison tool defaults to all
-  adapters; the Start workload explicitly selects `-Target start-menu`.
+  each Taskbar and Start module's path, PE/PDB key, SHA-256, and length.
+  File Explorer customization remains disabled, so its additional lazy-loaded
+  modules are recorded but do not gate this workload. The comparison tool
+  defaults to all adapters; this workload explicitly selects `-Target shell`
+  (Taskbar and Start). The earlier Start-only scope remains available.
   Fingerprint schema 2 also includes the loaded Start UI payloads
   (`StartDocked.dll`, `StartMenu.dll`, `Windows.UI.Xaml.Controls.dll` when loaded).
   A matching launcher EXE alone does not prove the Start UI matches. Older
@@ -87,6 +88,12 @@ unattended. A missing source VM/state is an error, never a provisioning request.
 Do not run ISeeYou and Metaplasia labs concurrently; the adapter refuses a
 running VM and restores the clean checkpoint before and after its own run.
 
+CLI mutations wait up to 15 seconds for the durable settings-write
+acknowledgement, without replaying timed-out commands. Read-only CLI requests
+keep their shorter budgets. A cold guest can exceed the former two-second
+write budget even when the native host successfully commits the setting;
+the delayed-acknowledgement native test covers this response contract.
+
 To prepare the same VM for the pinned revision, download the x64 MSU from
 [Microsoft KB5129195](https://support.microsoft.com/help/5129195), then pass its
 path with `-WindowsUpdatePath`. This is guest-only servicing, not a host update.
@@ -118,8 +125,11 @@ The adapter performs the following operations:
 5. completes the baseline's one-time first-user OOBE in a first session, then
    starts an on-demand scheduled task in a second interactive session. The task
    is bound to the expected SID and must prove it has a limited, non-admin token.
+   The first connection is observed until the workload starts or OOBE disconnects
+   (at most 90 seconds); a late disconnect cannot fall through into the normal
+   workload wait. Reconnection still requires the guest OOBE and logoff events;
    The guest UI Automation client runs in an MTA; the separate RDP form stays STA;
-6. enables only Start menu customization and confirms Taskbar remains disabled;
+6. initially enables only Start menu customization and confirms Taskbar is disabled;
 7. opens the real Windows 11 Start menu and requires native XAML diagnostics to
    be active only after `UpdateLayout` verifies the actual frame, panel, offset,
    visibility, and label geometry. Both UI Automation markers must also be
@@ -127,8 +137,13 @@ The adapter performs the following operations:
 8. repeatedly opens and closes Start, toggles All apps content, verifies live
    reconfiguration, disables and checks exact visual removal, terminates the
    Start host, and verifies reinjection against the replacement process;
+   then enables Taskbar using the existing capsule design, independently checks
+   the rendered clock/Start bounds and capsule inset, toggles capsule and Show
+   Desktop settings four times, verifies native geometry restoration on disable,
+   restarts only the guest Explorer and requires reinjection into its new PID;
+   finally verifies Taskbar and three-panel Start working together;
 9. fails on Application Error or Windows Error Reporting crash events for
-   Metaplasia or `StartMenuExperienceHost.exe` during the workload;
+   Metaplasia, `StartMenuExperienceHost.exe` or `explorer.exe` during the workload;
 10. disables the target, stops only binaries under the isolated install root,
    removes Metaplasia settings/startup/policy ownership, removes the temporary
    task, restores the saved RDP state, removes its firewall rule, and reboots;
@@ -156,6 +171,9 @@ Every run produces a unique host result directory with:
 - bounded Start XAML summaries and the complete active diagnostic snapshot;
 - bounded `host.log` and `watchdog.log` copies on every run;
 - live window/UI Automation geometry samples;
+- `taskbar-samples.json`, including baseline, capsule/reconfiguration, restore,
+  Explorer restart and coexistence measurements; a claimed Active state without
+  the expected bounds or visibility change cannot pass;
 - guest-only input/thread desktop, foreground/shell HWND, and bounded window
   metadata (`guest-desktop-evidence.json`), including failures before injection;
 - the final target snapshot and any matching crash events; and
@@ -200,3 +218,17 @@ isolated-network removal passed. Taskbar remained disabled and uninjected.
 This is geometry/input validation at 1366x768, not a screenshot/pixel comparison.
 Release/Authenticode runtime certification remains separate; that profile stays
 excluded from Release builds.
+
+Development portable 0.1.17 passed the combined Start and Taskbar workload in
+run `20260929-180819-662`, using package `20260929-175914-459`. The guest and
+target host matched Windows `10.0.26200.9457` and every required Taskbar/Start
+image (including SHA-256), before injection. All 19 Taskbar geometry samples
+passed: the clock's right edge moved from 1326 to 1314 pixels with the existing
+12-pixel capsule inset, returned on disable, and followed all four capsule/
+Show Desktop toggle cycles. Explorer changed PID from 8212 to 4032 and the
+replacement received the same styles; three-panel Start remained functional.
+The native runtime recorded no errors. Uninstall, post-reboot cleanliness,
+original-baseline restoration and isolated-network removal all passed.
+The styling agent DLL is byte-identical to 0.1.16; no appearance rules changed.
+These results cover the development runtime at 1366x768, not pixel
+comparison, other DPI/multiple monitors, or Release/Authenticode certification.

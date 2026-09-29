@@ -29,6 +29,12 @@ using metaplasia::protocol::TargetId;
 using metaplasia::protocol::XamlStyleStage;
 using metaplasia::protocol::XamlStyleState;
 
+// A mutation is acknowledged only after the atomic settings write is flushed
+// to disk. The short read-only budget can expire during a cold VM/slow-drive
+// flush even when the command is applied. Keep writes bounded, without retrying
+// a command whose acknowledgement may have been lost.
+constexpr auto kSettingsWriteTimeout = std::chrono::seconds(15);
+
 const char* TargetName(const TargetId target) noexcept {
     switch (target) {
         case TargetId::taskbar:
@@ -919,7 +925,7 @@ int wmain(const int argc, wchar_t** argv) {
         request.header.kind = MessageKind::set_customization_request;
         request.header.request_id = 1;
         request.payload = std::move(payload).value();
-        auto response = client.Transact(request, std::chrono::seconds(2));
+        auto response = client.Transact(request, kSettingsWriteTimeout);
         if (!response.ok()) {
             std::cerr << response.status().message() << '\n';
             return 3;
@@ -969,7 +975,7 @@ int wmain(const int argc, wchar_t** argv) {
     request.header.kind = MessageKind::set_enabled_request;
     request.header.request_id = 1;
     request.payload = std::move(payload).value();
-    auto response = client.Transact(request, std::chrono::seconds(2));
+    auto response = client.Transact(request, kSettingsWriteTimeout);
     if (!response.ok()) {
         std::cerr << response.status().message() << '\n';
         return 3;

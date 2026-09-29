@@ -24,6 +24,11 @@ foreach ($script in $scripts) {
 }
 
 $guestRoot = Join-Path $e2eRoot 'guest'
+$uninstallText = Get-Content -LiteralPath (Join-Path $guestRoot 'Uninstall-MetaplasiaE2E.ps1') -Raw
+if ($uninstallText.IndexOf('$processDeadline =') -lt 0 -or
+    $uninstallText.IndexOf('$processDeadline =') -ge $uninstallText.IndexOf('$agentPath =')) {
+    throw 'Uninstall must stop the runtime before restarting agent-bearing shell processes.'
+}
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
 foreach ($guestScript in Get-ChildItem -LiteralPath $guestRoot `
         -Filter '*.ps1' -File) {
@@ -111,6 +116,11 @@ foreach ($requiredBaselineRecoveryContract in @(
 }
 $runtimeText = Get-Content -LiteralPath (
     Join-Path $e2eRoot 'Invoke-MetaplasiaHyperVLab.ps1') -Raw
+if ($runtimeText -notmatch '\$firstLogonDeadline = ' -or
+    $runtimeText -notmatch 'while \(-not \$taskStart.startedMarker -and -not \$rdpProcess.HasExited' -or
+    $runtimeText -match '\$rdpProcess.WaitForExit\(10000\)') {
+    throw 'First-logon startup must observe late OOBE disconnects until the bounded deadline.'
+}
 foreach ($contract in @(
     'SourceLabRoot',
     'out\lab\vm-state.json',
@@ -264,6 +274,41 @@ foreach ($case in @('visible', 'missing', 'partial', 'clipped-right', 'clipped-t
     }
 }
 
+$taskbarAssertion = $workloadAst.Find({ param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Assert-MetaplasiaTaskbarGeometry'
+}, $false)
+if ($null -eq $taskbarAssertion) { throw 'The independent Taskbar assertion is missing.' }
+. ([scriptblock]::Create($taskbarAssertion.Extent.Text))
+foreach ($case in @('capsule', 'restored', 'unchanged', 'clipped', 'occluded', 'missing', 'hide-applied', 'hide-ignored')) {
+    $baseline = [ordered]@{ clock = @{ left = 1220; width = 100 } }
+    $geometry = [ordered]@{
+        processId = 42; screenWidth = 1366; screenHeight = 768; showDesktopCount = 1
+        clock = @{ left = 1208; top = 720; width = 100; height = 48; hitProcessId = 42 }
+        start = @{ left = 400; top = 720; width = 48; height = 48; hitProcessId = 42 }
+    }
+    switch ($case) {
+        'restored' { $geometry.clock.left = 1220 }
+        'unchanged' { $geometry.clock.left = 1220 }
+        'clipped' { $geometry.clock.left = 1360 }
+        'occluded' { $geometry.clock.hitProcessId = 43 }
+        'missing' { $geometry.clock = $null }
+        'hide-applied' { $geometry.showDesktopCount = 0 }
+    }
+    $accepted = $true
+    try {
+        Assert-MetaplasiaTaskbarGeometry -Geometry $geometry -Baseline $baseline `
+            -Capsule ($case -ne 'restored') -HideShowDesktop ($case -like 'hide-*')
+    } catch { $accepted = $false }
+    if ($accepted -ne ($case -in @('capsule', 'restored', 'hide-applied'))) {
+        throw "Independent Taskbar geometry regression: $case; accepted=$accepted."
+    }
+}
+if ($workloadAst.Extent.Text -notmatch '-Target shell' -or
+    $workloadAst.Extent.Text -notmatch 'taskbar-explorer-restart') {
+    throw 'Taskbar certification must require exact images and Explorer restart recovery.'
+}
+
 $fixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('Metaplasia-FingerprintTest-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
 try {
@@ -316,7 +361,7 @@ $global:LASTEXITCODE = 0
     $actualPath = Join-Path $fixtureRoot 'actual.json'
     $fixtureJson = $fixture | ConvertTo-Json -Depth 8
     $fixtureJson | Set-Content -LiteralPath $expectedPath -Encoding utf8
-    foreach ($case in @('equal', 'edition', 'path-case', 'build', 'hash', 'key', 'version', 'other-adapter', 'payload-hash', 'missing-payload', 'legacy-schema')) {
+    foreach ($case in @('equal', 'edition', 'path-case', 'build', 'hash', 'key', 'version', 'other-adapter', 'taskbar-hash', 'payload-hash', 'missing-payload', 'legacy-schema')) {
         $actual = $fixtureJson | ConvertFrom-Json
         switch ($case) {
             'edition' { $actual.operatingSystem.editionId = 'ProfessionalWorkstation' }
@@ -326,19 +371,21 @@ $global:LASTEXITCODE = 0
             'key' { $actual.adapters.startMenu.modules[0].compatibilityKey = 'other' }
             'version' { $actual.adapters.startMenu.modules[0].fileVersion = '1.2.3.5' }
             'other-adapter' { $actual.adapters.fileExplorer.modules[0].sha256 = ('E' * 64) }
+            'taskbar-hash' { $actual.adapters.taskbar.modules[0].sha256 = ('F' * 64) }
             'payload-hash' { $actual.startMenuPayloads[0].sha256 = ('D' * 64) }
             'missing-payload' { $actual.startMenuPayloads = @() }
             'legacy-schema' { $actual.schema = 1 }
         }
         $actual | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $actualPath -Encoding utf8
-        foreach ($target in @('all', 'start-menu')) {
+        foreach ($target in @('all', 'start-menu', 'shell')) {
             $accepted = $true
             try {
                 & (Join-Path $guestRoot 'Compare-MetaplasiaCompatibilityFingerprint.ps1') `
                     -ExpectedPath $expectedPath -ActualPath $actualPath -Target $target | Out-Null
             } catch { $accepted = $false }
             $shouldPass = $case -in @('equal', 'edition', 'path-case', 'version') -or
-                ($target -eq 'start-menu' -and $case -eq 'other-adapter')
+                ($target -in @('start-menu', 'shell') -and $case -eq 'other-adapter') -or
+                ($target -eq 'start-menu' -and $case -eq 'taskbar-hash')
             if ($accepted -ne $shouldPass) {
                 throw "Fingerprint gate regression: target=$target; case=$case; accepted=$accepted."
             }
