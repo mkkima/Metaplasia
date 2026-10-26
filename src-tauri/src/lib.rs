@@ -969,7 +969,7 @@ fn show_or_create_main_window(app: &tauri::AppHandle) -> Result<(), String> {
         .minimizable(true)
         .decorations(true)
         .theme(Some(tauri::Theme::Dark))
-        .background_color(Color(0, 0, 0, 255))
+        .background_color(Color(32, 35, 41, 255))
         .build()
         .map_err(|error| format!("Could not create the Metaplasia window: {error}"))?;
     show_window(&window)
@@ -1079,9 +1079,10 @@ fn apply_dark_window_frame(window: &WebviewWindow) {
         return;
     };
     let enabled = 1_i32;
-    let black = 0_u32;
-    let border = 0x001A_1A1A_u32;
-    let white = 0x00FF_FFFF_u32;
+    // DWM uses COLORREF (0x00BBGGRR); match the control center's graphite theme.
+    let caption_color = 0x0030_2925_u32;
+    let border_color = 0x0054_4740_u32;
+    let text_color = 0x00F5_F0ED_u32;
     let attributes = [
         (
             DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -1090,18 +1091,18 @@ fn apply_dark_window_frame(window: &WebviewWindow) {
         ),
         (
             DWMWA_BORDER_COLOR,
-            (&border as *const u32).cast::<std::ffi::c_void>(),
-            std::mem::size_of_val(&border) as u32,
+            (&border_color as *const u32).cast::<std::ffi::c_void>(),
+            std::mem::size_of_val(&border_color) as u32,
         ),
         (
             DWMWA_CAPTION_COLOR,
-            (&black as *const u32).cast::<std::ffi::c_void>(),
-            std::mem::size_of_val(&black) as u32,
+            (&caption_color as *const u32).cast::<std::ffi::c_void>(),
+            std::mem::size_of_val(&caption_color) as u32,
         ),
         (
             DWMWA_TEXT_COLOR,
-            (&white as *const u32).cast::<std::ffi::c_void>(),
-            std::mem::size_of_val(&white) as u32,
+            (&text_color as *const u32).cast::<std::ffi::c_void>(),
+            std::mem::size_of_val(&text_color) as u32,
         ),
     ];
     for (attribute, value, value_size) in attributes {
