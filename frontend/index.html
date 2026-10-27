@@ -101,7 +101,11 @@
           <div class="hero-grid">
             <article class="hero-card">
               <div class="hero-copy"><span class="section-kicker">Runtime status</span><h2 id="overview-active-count">Connecting…</h2><p id="overview-summary">Waiting for the native host.</p></div>
-              <div class="hero-meter" aria-hidden="true"><span data-meter="taskbar"></span><span data-meter="start"></span><span data-meter="explorer"></span></div>
+              <div class="hero-meter" aria-hidden="true">
+                <span data-meter="taskbar" title="Taskbar"><svg><use href="#i-taskbar"></use></svg></span>
+                <span data-meter="start" title="Start menu"><svg><use href="#i-start"></use></svg></span>
+                <span data-meter="explorer" title="File Explorer"><svg><use href="#i-explorer"></use></svg></span>
+              </div>
             </article>
             <article class="security-card">
               <svg><use href="#i-shield"></use></svg>

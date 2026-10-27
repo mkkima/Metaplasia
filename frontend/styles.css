@@ -292,13 +292,13 @@ svg {
   background: var(--surface-2);
 }
 
-.hero-copy { padding: 28px; }
+.hero-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 28px; }
 .hero-copy h2 { margin: 10px 0 6px; font-size: 27px; letter-spacing: -0.02em; }
 .hero-copy p { margin: 0; color: var(--text-soft); font-size: 14px; }
 
-.hero-meter { display: flex; align-items: end; justify-content: center; gap: 12px; padding: 30px; background: var(--surface-1); }
-.hero-meter span { width: 26px; height: 42%; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--control); transition: height 420ms cubic-bezier(.2,.8,.2,1), background 220ms ease, box-shadow 220ms ease; }
-.hero-meter span.is-running { height: 76%; background: var(--accent); border-color: var(--accent); box-shadow: none; }
+.hero-meter { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 20px; background: var(--surface-1); }
+.hero-meter span { display: grid; place-items: center; flex: 0 0 36px; height: 44px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface-3); color: var(--muted); transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; }
+.hero-meter span.is-running { background: var(--accent-dim); border-color: var(--accent); color: var(--accent-bright); }
 
 .security-card { display: flex; align-items: flex-start; gap: 16px; padding: 26px; }
 .security-card svg { flex: 0 0 auto; width: 25px; height: 25px; color: var(--success); }
