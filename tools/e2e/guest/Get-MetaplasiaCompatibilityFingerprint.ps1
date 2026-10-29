@@ -98,7 +98,7 @@ foreach ($line in $reportLines) {
 $allowedModuleCounts = [ordered]@{
     taskbar = @(5)
     fileExplorer = @(3, 4)
-    startMenu = @(2)
+    startMenu = @(2, 5)
 }
 $requiredModuleNames = [ordered]@{
     taskbar = @('Explorer.EXE', 'user32.dll', 'Taskbar.dll',
@@ -119,6 +119,13 @@ foreach ($adapterName in $allowedModuleCounts.Keys) {
             ($allowedModuleCounts[$adapterName] -join ', '))
     }
     $actualNames = @($adapter.modules | ForEach-Object { [string]$_.name })
+    if ($adapterName -eq 'startMenu' -and $adapter.modules.Count -eq 5) {
+        foreach ($payloadName in @('StartDocked.dll', 'StartMenu.dll', 'Windows.UI.Xaml.Controls.dll')) {
+            if (@($actualNames | Where-Object { $_ -ieq $payloadName }).Count -ne 1) {
+                throw "compatibility-report omitted $payloadName for the complete Start profile."
+            }
+        }
+    }
     if (@($actualNames | Sort-Object -Unique).Count -ne $actualNames.Count) {
         throw "compatibility-report repeated a module for $adapterName."
     }

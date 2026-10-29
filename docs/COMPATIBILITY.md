@@ -24,6 +24,35 @@ the protected on-disk images on the affected machines. No entry implies support
 for any other revision in the 26200 family, and broad compatibility still
 requires a clean multi-build VM matrix.
 
+## Local development profile: 26300.9711
+
+Debug builds also contain local, exact-image Taskbar, File Explorer, and Start
+profiles for `10.0.26300.9711` (reported display version `26H2`). They were
+added at the user's explicit request to proceed without a VM. Mapped PE/PDB
+identities were cross-checked against disk images with valid Microsoft
+signatures. File Explorer requires the observed `WindowsAppRuntime.CBS.2`
+location. The Start profile additionally requires the exact loaded
+`StartDocked.dll`, `StartMenu.dll`, and `Windows.UI.Xaml.Controls.dll` payloads,
+not just the launcher and XAML runtime.
+
+These entries are not VM-certified and are excluded from Release. Deterministic
+tests enforce every image identity and path, missing/duplicate dependency
+rejection, neighboring-revision rejection, and Release exclusion. Read-only
+process inspection confirms only the compatibility gate; it does not establish
+successful styling, crash recovery, sign-in/out, or multi-monitor behavior.
+No appearance rules or saved settings are changed by these profiles.
+
+The local smoke run on 2026-10-29 accepted all three mapped-image profiles and
+loaded the unchanged agent into the existing shell processes, without restarting
+Explorer or Start. The host reported successful configuration for both process
+groups; Start's native style health reported `active`, four successful applies,
+and zero failures. No new runtime errors or matching Application crash events
+were observed during this bounded check. The pre-existing `agent-acl-failed`
+warning remains (access denied while setting the DLL ACL); it did not prevent
+these configurations. This is not visual/E2E certification. Debug and Release
+native suites each passed 12 tests, exercising the unchanged installed agent
+only inside the separate agent test process.
+
 ## Signed external profiles
 
 An optional sibling `metaplasia-compatibility-pack.dll` can add profiles for

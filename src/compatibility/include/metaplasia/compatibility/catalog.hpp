@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <span>
@@ -66,6 +67,12 @@ struct ProfilePackLoadResult final {
 
 [[nodiscard]] std::string_view AdapterName(AdapterId adapter) noexcept;
 [[nodiscard]] Result<WindowsVersion> QueryWindowsVersion();
+
+// Selects an exact catalog entry, without approving a process. The observed
+// mapped modules must still pass EvaluateProfile/EvaluateProcess.
+[[nodiscard]] Result<std::optional<CompatibilityProfile>> FindProfile(
+    AdapterId adapter,
+    const WindowsVersion& windows);
 
 // Pure profile evaluation used by runtime inspection and deterministic tests.
 [[nodiscard]] CompatibilityDecision EvaluateProfile(

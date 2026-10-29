@@ -87,9 +87,8 @@ Result<std::filesystem::path> WindowsDirectory() {
 
 const std::vector<CompatibilityProfile>& CompiledProfiles() {
     // These profiles were captured and live-tested on exact Windows 11 25H2
-    // revisions. An update must add a new profile after the complete
-    // enable/disable/crash-recovery matrix passes; broad build ranges are
-    // intentionally forbidden.
+    // revisions. Debug-only local profiles below are explicitly not certified
+    // by that matrix. Broad build ranges are intentionally forbidden.
     static const std::vector<CompatibilityProfile> profiles{
         {
             "win11-25h2-26200.8037-x64-start-xaml-v1",
@@ -269,6 +268,98 @@ const std::vector<CompatibilityProfile>& CompiledProfiles() {
                     "B7398E0107885525880FA8C45B816A161"},
             }},
 #ifndef NDEBUG
+        // Local development opt-in for the exact mapped images captured on
+        // 26300.9711. Disk identities and Microsoft signatures were checked,
+        // but VM/crash-recovery certification was explicitly waived. Do not
+        // promote these profiles to Release without that validation.
+        {
+            "win11-26h2-26300.9711-x64-taskbar-local-v1",
+            AdapterId::taskbar_clock,
+            {10, 0, 26300, 9711},
+            {
+                {
+                    L"explorer.exe", L"explorer.exe",
+                    "8664-BEE7E13F-00344000-00359899-explorer.pdb-"
+                    "1D666F27BA2F85885888D3E2B94B0FD81"},
+                {
+                    L"user32.dll", L"System32\\user32.dll",
+                    "8664-1D1C21A9-001D7000-001E61E2-user32.pdb-"
+                    "F0BF56EE0A784974D49A58173A7CBC7E1"},
+                {
+                    L"Taskbar.dll", L"System32\\Taskbar.dll",
+                    "8664-769B877B-00308000-003142B7-Taskbar.pdb-"
+                    "DAB69A79FEE033F0D81E023FBF172B511"},
+                {
+                    L"Taskbar.View.dll",
+                    L"SystemApps\\MicrosoftWindows.Client.Core_"
+                    L"cw5n1h2txyewy\\Taskbar.View.dll",
+                    "8664-6AA3487A-00997000-00997AD8-Taskbar.View.pdb-"
+                    "24534974E00E46A58F69F60D0CEB9BD91"},
+                {
+                    L"twinui.pcshell.dll", L"System32\\twinui.pcshell.dll",
+                    "8664-BC86BB4D-009A5000-009A2204-twinui.pcshell.pdb-"
+                    "9507F3DAD47F5F026569FC50273C40D71"},
+            }},
+        {
+            "win11-26h2-26300.9711-x64-explorer-local-v2",
+            AdapterId::file_explorer_title,
+            {10, 0, 26300, 9711},
+            {
+                {
+                    L"explorer.exe", L"explorer.exe",
+                    "8664-BEE7E13F-00344000-00359899-explorer.pdb-"
+                    "1D666F27BA2F85885888D3E2B94B0FD81"},
+                {
+                    L"user32.dll", L"System32\\user32.dll",
+                    "8664-1D1C21A9-001D7000-001E61E2-user32.pdb-"
+                    "F0BF56EE0A784974D49A58173A7CBC7E1"},
+                {
+                    L"dwmapi.dll", L"System32\\dwmapi.dll",
+                    "8664-B15B6B4A-0002E000-00030704-dwmapi.pdb-"
+                    "03449B4864BEFF0E155BEB1845861AF71"},
+                {
+                    L"Microsoft.Internal.FrameworkUdk.dll",
+                    L"SystemApps\\Microsoft.WindowsAppRuntime.CBS.2_"
+                    L"8wekyb3d8bbwe\\Microsoft.Internal.FrameworkUdk.dll",
+                    "8664-1E55A7F2-000E2000-000ED768-"
+                    "Microsoft.Internal.FrameworkUdk.pdb-"
+                    "C6961B993EC4FC97EB658F91BAC6278F1"},
+            }},
+        {
+            "win11-26h2-26300.9711-x64-start-xaml-local-v1",
+            AdapterId::start_menu_xaml,
+            {10, 0, 26300, 9711},
+            {
+                {
+                    L"StartMenuExperienceHost.exe",
+                    L"SystemApps\\Microsoft.Windows.StartMenuExperienceHost_"
+                    L"cw5n1h2txyewy\\StartMenuExperienceHost.exe",
+                    "8664-14A98365-00038000-0003E450-"
+                    "startmenuexperiencehost.pdb-"
+                    "1A3D3C8E9F91E211D88A10EFAB3BBBD31"},
+                {
+                    L"Windows.UI.Xaml.dll", L"System32\\Windows.UI.Xaml.dll",
+                    "8664-27807062-01121000-01121BDF-windows.ui.xaml.pdb-"
+                    "E15A88ED9599B347A0D2576C13287FC41"},
+                {
+                    L"StartDocked.dll",
+                    L"SystemApps\\Microsoft.Windows.StartMenuExperienceHost_"
+                    L"cw5n1h2txyewy\\StartDocked.dll",
+                    "8664-E540DF64-0041D000-0041D269-StartDocked.pdb-"
+                    "65DDC4DBDAB3EC86831571146496637C1"},
+                {
+                    L"StartMenu.dll",
+                    L"SystemApps\\MicrosoftWindows.Client.Core_"
+                    L"cw5n1h2txyewy\\StartMenu.dll",
+                    "8664-6A8F587A-004DD000-004E34F8-StartMenu.pdb-"
+                    "932E8BA3FA3A41429498E5F6426A43E61"},
+                {
+                    L"Windows.UI.Xaml.Controls.dll",
+                    L"System32\\Windows.UI.Xaml.Controls.dll",
+                    "8664-B084F599-00329000-0032BD5D-"
+                    "Windows.UI.Xaml.Controls.pdb-"
+                    "559C62626C4A21F93930D93D3A98AF741"},
+            }},
         // Validated with the development runtime in the exact-image Windows
         // 26200.9457 lab: capsule/tray geometry, restore, Explorer restart and
         // coexistence with Start. Release runtime certification is separate.
@@ -413,42 +504,6 @@ Result<ModuleInspection> InspectRequiredModules(
             std::string(AdapterName(adapter)) + " are loaded in the target";
     }
     return inspection;
-}
-
-Result<std::optional<CompatibilityProfile>> FindProfile(
-    const AdapterId adapter,
-    const WindowsVersion& windows) {
-    std::optional<CompatibilityProfile> found;
-    const auto consider = [&found, adapter, &windows](
-                              const CompatibilityProfile& profile)
-        -> Result<void> {
-        if (profile.adapter != adapter || profile.windows != windows) {
-            return {};
-        }
-        if (found.has_value()) {
-            return Status(
-                ErrorCode::invalid_data,
-                "Compatibility catalog contains an ambiguous profile");
-        }
-        found = profile;
-        return {};
-    };
-    for (const auto& profile : CompiledProfiles()) {
-        auto accepted = consider(profile);
-        if (!accepted.ok()) {
-            return accepted.status();
-        }
-    }
-    {
-        std::lock_guard lock(g_external_profiles_mutex);
-        for (const auto& profile : g_external_profiles) {
-            auto accepted = consider(profile);
-            if (!accepted.ok()) {
-                return accepted.status();
-            }
-        }
-    }
-    return found;
 }
 
 CompatibilityDecision Unsupported(
@@ -663,6 +718,42 @@ Result<CompatibilityDecision> EvaluateProcess(
         windows.value(),
         inspection.value().observations,
         windows_directory.value());
+}
+
+Result<std::optional<CompatibilityProfile>> FindProfile(
+    const AdapterId adapter,
+    const WindowsVersion& windows) {
+    std::optional<CompatibilityProfile> found;
+    const auto consider = [&found, adapter, &windows](
+                              const CompatibilityProfile& profile)
+        -> Result<void> {
+        if (profile.adapter != adapter || profile.windows != windows) {
+            return {};
+        }
+        if (found.has_value()) {
+            return Status(
+                ErrorCode::invalid_data,
+                "Compatibility catalog contains an ambiguous profile");
+        }
+        found = profile;
+        return {};
+    };
+    for (const auto& profile : CompiledProfiles()) {
+        auto accepted = consider(profile);
+        if (!accepted.ok()) {
+            return accepted.status();
+        }
+    }
+    {
+        std::lock_guard lock(g_external_profiles_mutex);
+        for (const auto& profile : g_external_profiles) {
+            auto accepted = consider(profile);
+            if (!accepted.ok()) {
+                return accepted.status();
+            }
+        }
+    }
+    return found;
 }
 
 Result<void> InstallVerifiedExternalProfiles(
