@@ -1005,15 +1005,16 @@ HRESULT ShellXamlStyle::ApplyGeometry(
     if (capsule_enabled) {
         if (element.geometry_rule ==
             ShellGeometryRule::taskbar_capsule_layout_root) {
+            // Inset the shared coordinate space symmetrically. Its center is
+            // also the center used by Windows to arrange the app-icon group.
+            margin.left += element.capsule_outer_margin;
             margin.right += element.capsule_outer_margin;
         } else if (
             element.geometry_rule ==
             ShellGeometryRule::taskbar_capsule_background) {
-            margin.left += element.capsule_outer_margin;
             margin.top += kTaskbarCapsuleVerticalMargin;
-            // The shared parent already owns the right inset. Applying it
-            // here again narrows the background, shifts its center left and
-            // leaves the system tray outside the painted capsule.
+            // Horizontal insets belong to the shared parent, not the paint
+            // surface; adding either here would misalign paint and content.
             margin.bottom += kTaskbarCapsuleVerticalMargin;
         }
     }

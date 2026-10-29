@@ -635,7 +635,7 @@ bool Near(const double left, const double right) noexcept {
     return std::abs(left - right) < 0.000001;
 }
 
-void TestCapsulePaintedBounds() {
+void TestCapsuleBoundsAndIconCenter() {
     using namespace metaplasia::agent;
     for (const double width : {1280.0, 1366.0, 1920.0, 2048.0, 2560.0, 3840.0}) {
         FakeAccessor accessor;
@@ -656,7 +656,7 @@ void TestCapsulePaintedBounds() {
                 "observe capsule painted surface");
 
         // Model the actual stretch layout, not just individual Margin values:
-        // the parent's right inset has already reduced the background's slot.
+        // parent insets also determine the frame used by native icon centering.
         const double painted_left = container.margin.left + background.margin.left;
         const double painted_right = width - container.margin.right - background.margin.right;
         const double inset = CalculateTaskbarCapsuleOuterMargin(width);
@@ -665,16 +665,26 @@ void TestCapsulePaintedBounds() {
         Require(Near(painted_right - painted_left, (std::min)(kTaskbarCapsuleMaximumWidth, width - 24.0)),
                 "painted capsule retains its maximum width without a double right inset");
         for (const double scale : {1.0, 1.25, 1.5, 2.0}) {
+            const double frame_width = width - container.margin.left - container.margin.right;
+            const double icon_center = container.margin.left + frame_width / 2.0;
+            Require(Near(icon_center * scale, width * scale / 2.0),
+                    "native app-icon group and capsule share the same physical center");
             Require(Near((painted_left + painted_right) * scale / 2.0, width * scale / 2.0),
                     "capsule remains physically centered at mixed monitor DPI scales");
             Require(Near(painted_right * scale, (width - container.margin.right) * scale),
                     "tray layout boundary remains inside the painted capsule");
         }
+        const auto inset_margin = container.margin;
+        Require(style.ApplyDesiredToTrackedElements() == S_OK &&
+                    Near(container.margin.left, inset_margin.left) &&
+                    Near(container.margin.right, inset_margin.right),
+                "reapplying capsule geometry never accumulates horizontal insets");
         Require(style.Configure(false, 1000, false, false, false, true,
                                 false, 0xFF000000U, 1000, false, false, 0xFF000000U) &&
                     style.ApplyDesiredToTrackedElements() == S_OK,
                 "disable capsule bounds fixture");
-        Require(Near(container.margin.right, 0.0) && Near(background.margin.left, 0.0) &&
+        Require(Near(container.margin.left, 0.0) && Near(container.margin.right, 0.0) &&
+                    Near(background.margin.left, 0.0) &&
                     Near(background.margin.right, 0.0), "bounds fixture restores native margins");
     }
 }
@@ -682,7 +692,7 @@ void TestCapsulePaintedBounds() {
 }  // namespace
 
 int main() {
-    TestCapsulePaintedBounds();
+    TestCapsuleBoundsAndIconCenter();
     using metaplasia::agent::IsSupportedStartMenuRootType;
     using metaplasia::agent::IsStartMenuRecommendedElement;
     using metaplasia::agent::IdentifyStartMenuLayoutRule;
@@ -1764,13 +1774,13 @@ int main() {
             metaplasia::agent::kTaskbarCapsuleBackgroundColor,
         "apply the reference dark capsule color");
     Require(
-        Near(taskbar_container.margin.left, 3.0) &&
+        Near(taskbar_container.margin.left, 253.0) &&
             Near(taskbar_container.margin.top, 2.0) &&
             Near(taskbar_container.margin.right, 255.0) &&
             Near(taskbar_container.margin.bottom, 4.0),
-        "constrain the shared layout at the system-tray edge");
+        "constrain both shared-layout edges without shifting native icon centering");
     Require(
-        Near(capsule_background.margin.left, 257.0) &&
+        Near(capsule_background.margin.left, 7.0) &&
             Near(capsule_background.margin.top, 3.0) &&
             Near(capsule_background.margin.right, 9.0) &&
             Near(capsule_background.margin.bottom, 4.0),
@@ -1810,10 +1820,11 @@ int main() {
             210) == S_OK,
         "style the secondary Taskbar background");
     Require(
-        Near(secondary_container.margin.right, 12.0) &&
-            Near(secondary_background.margin.left, 12.0) &&
+        Near(secondary_container.margin.left, 12.0) &&
+            Near(secondary_container.margin.right, 12.0) &&
+            Near(secondary_background.margin.left, 0.0) &&
             Near(secondary_background.margin.right, 0.0) &&
-            Near(capsule_background.margin.left, 257.0) &&
+            Near(capsule_background.margin.left, 7.0) &&
             Near(capsule_background.margin.right, 9.0),
         "keep per-monitor capsule margins isolated");
 

@@ -42,13 +42,14 @@ reads and retains its exact original opacity, visibility, brush, size,
 alignment, hit-test behavior, margin, or corner radius before the first write.
 Capsule margins are calculated from the actual shared-layout width, so a
 1920-DIP Taskbar gets 250-DIP visual boundaries while narrow displays retain
-at least 12 DIPs. The common parent owns the right layout boundary that keeps
-System Tray inside the capsule. The background adds only the matching left
-inset: the parent has already applied the right one. Adding the right inset
-again would shrink the painted capsule a second time, move its center left,
-and leave the tray outside it, especially on wide/high-DPI displays. Native
-background margins are preserved. The native one-edge stroke is expanded into
-a transparent, non-interactive rounded rectangle with a `#4A4A4A` outline. Its 1-DIP stroke
+at least 12 DIPs. The common parent owns both horizontal insets. This keeps
+the native app-icon layout centered in the capsule while retaining the right
+boundary for System Tray. A right-only parent inset would shift the native
+icon center left by half that inset, even with a correctly centered background.
+The background retains its native horizontal margins and adds only vertical
+spacing; repeating a horizontal inset there would misalign paint and content.
+The native one-edge stroke is expanded into a transparent, non-interactive
+rounded rectangle with a `#4A4A4A` outline. Its 1-DIP stroke
 path is inset by 0.5 DIPs and uses an 11.5-DIP radius, keeping the outer stroke
 edge aligned with the capsule's 12-DIP boundary without clipping the curve.
 Layout rounding is disabled only for the outline so the half-DIP compensation
@@ -64,6 +65,14 @@ restores all owned values, releases ownership, removes the visual-tree
 subscription, and then removes the clock hook.
 
 ## Diagnostics and failure behavior
+
+Centering regression tests cover both the painted bounds and the native frame
+center at six logical widths and four DPI scales, including repeated apply and
+restore. A read-only UI Automation check on 2026-10-29 measured the actual app
+group after deploying this fix: the 2560-pixel/125% monitor's center was exactly
+1280 pixels; the 1920-pixel/100% secondary monitor differed by 0.5 physical
+pixels. Before the fix the same groups were 196 and 124.5 pixels left of their
+monitor centers. This is geometry validation, not screenshot/pixel comparison.
 
 `metaplasia-cli xaml-types taskbar` returns a bounded local snapshot of observed
 types and named/custom elements. The command never injects an agent. It works
