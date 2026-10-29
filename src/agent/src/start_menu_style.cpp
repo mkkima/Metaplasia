@@ -1011,7 +1011,9 @@ HRESULT ShellXamlStyle::ApplyGeometry(
             ShellGeometryRule::taskbar_capsule_background) {
             margin.left += element.capsule_outer_margin;
             margin.top += kTaskbarCapsuleVerticalMargin;
-            margin.right += element.capsule_outer_margin;
+            // The shared parent already owns the right inset. Applying it
+            // here again narrows the background, shifts its center left and
+            // leaves the system tray outside the painted capsule.
             margin.bottom += kTaskbarCapsuleVerticalMargin;
         }
     }

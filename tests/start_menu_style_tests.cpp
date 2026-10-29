@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -634,9 +635,54 @@ bool Near(const double left, const double right) noexcept {
     return std::abs(left - right) < 0.000001;
 }
 
+void TestCapsulePaintedBounds() {
+    using namespace metaplasia::agent;
+    for (const double width : {1280.0, 1366.0, 1920.0, 2048.0, 2560.0, 3840.0}) {
+        FakeAccessor accessor;
+        ShellXamlStyle style(accessor, metaplasia::protocol::AgentTarget::explorer_shell);
+        Require(style.Configure(true, 1000, false, false, false, true,
+                                false, 0xFF000000U, 1000, false, false, 0xFF000000U),
+                "configure capsule bounds fixture");
+        auto& container = accessor.Add(1);
+        container.actual_width = width;
+        accessor.Add(2);
+        accessor.Add(3);
+        auto& background = accessor.Add(4);
+        Require(style.OnElementAdded(2, L"Taskbar.TaskbarFrame", L"TaskbarFrame", 1) == S_OK,
+                "observe capsule shared container");
+        Require(style.OnElementAdded(3, L"Windows.UI.Xaml.Controls.Grid", L"RootGrid", 2) == S_FALSE,
+                "observe capsule frame grid");
+        Require(style.OnElementAdded(4, L"Taskbar.TaskbarBackground", L"BackgroundControl", 3) == S_OK,
+                "observe capsule painted surface");
+
+        // Model the actual stretch layout, not just individual Margin values:
+        // the parent's right inset has already reduced the background's slot.
+        const double painted_left = container.margin.left + background.margin.left;
+        const double painted_right = width - container.margin.right - background.margin.right;
+        const double inset = CalculateTaskbarCapsuleOuterMargin(width);
+        Require(Near(painted_left, inset) && Near(painted_right, width - inset),
+                "painted capsule has equal monitor-relative outer insets");
+        Require(Near(painted_right - painted_left, (std::min)(kTaskbarCapsuleMaximumWidth, width - 24.0)),
+                "painted capsule retains its maximum width without a double right inset");
+        for (const double scale : {1.0, 1.25, 1.5, 2.0}) {
+            Require(Near((painted_left + painted_right) * scale / 2.0, width * scale / 2.0),
+                    "capsule remains physically centered at mixed monitor DPI scales");
+            Require(Near(painted_right * scale, (width - container.margin.right) * scale),
+                    "tray layout boundary remains inside the painted capsule");
+        }
+        Require(style.Configure(false, 1000, false, false, false, true,
+                                false, 0xFF000000U, 1000, false, false, 0xFF000000U) &&
+                    style.ApplyDesiredToTrackedElements() == S_OK,
+                "disable capsule bounds fixture");
+        Require(Near(container.margin.right, 0.0) && Near(background.margin.left, 0.0) &&
+                    Near(background.margin.right, 0.0), "bounds fixture restores native margins");
+    }
+}
+
 }  // namespace
 
 int main() {
+    TestCapsulePaintedBounds();
     using metaplasia::agent::IsSupportedStartMenuRootType;
     using metaplasia::agent::IsStartMenuRecommendedElement;
     using metaplasia::agent::IdentifyStartMenuLayoutRule;
@@ -1726,7 +1772,7 @@ int main() {
     Require(
         Near(capsule_background.margin.left, 257.0) &&
             Near(capsule_background.margin.top, 3.0) &&
-            Near(capsule_background.margin.right, 259.0) &&
+            Near(capsule_background.margin.right, 9.0) &&
             Near(capsule_background.margin.bottom, 4.0),
         "place both rounded background edges inside the layout bounds");
     Require(
@@ -1766,9 +1812,9 @@ int main() {
     Require(
         Near(secondary_container.margin.right, 12.0) &&
             Near(secondary_background.margin.left, 12.0) &&
-            Near(secondary_background.margin.right, 12.0) &&
+            Near(secondary_background.margin.right, 0.0) &&
             Near(capsule_background.margin.left, 257.0) &&
-            Near(capsule_background.margin.right, 259.0),
+            Near(capsule_background.margin.right, 9.0),
         "keep per-monitor capsule margins isolated");
 
     Require(

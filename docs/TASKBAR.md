@@ -43,10 +43,12 @@ alignment, hit-test behavior, margin, or corner radius before the first write.
 Capsule margins are calculated from the actual shared-layout width, so a
 1920-DIP Taskbar gets 250-DIP visual boundaries while narrow displays retain
 at least 12 DIPs. The common parent owns the right layout boundary that keeps
-System Tray inside the capsule. The background receives matching left and
-right margins so both rounded edges are rendered before the parent's clipping
-boundary. The native one-edge stroke is expanded into a transparent,
-non-interactive rounded rectangle with a `#4A4A4A` outline. Its 1-DIP stroke
+System Tray inside the capsule. The background adds only the matching left
+inset: the parent has already applied the right one. Adding the right inset
+again would shrink the painted capsule a second time, move its center left,
+and leave the tray outside it, especially on wide/high-DPI displays. Native
+background margins are preserved. The native one-edge stroke is expanded into
+a transparent, non-interactive rounded rectangle with a `#4A4A4A` outline. Its 1-DIP stroke
 path is inset by 0.5 DIPs and uses an 11.5-DIP radius, keeping the outer stroke
 edge aligned with the capsule's 12-DIP boundary without clipping the curve.
 Layout rounding is disabled only for the outline so the half-DIP compensation
