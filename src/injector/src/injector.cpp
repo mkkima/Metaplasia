@@ -693,7 +693,8 @@ Result<InjectionResult> Injector::ConfigureInternal(
         protocol::agent_feature_start_menu_background_color |
         protocol::agent_feature_file_explorer_custom_scrollbar |
         protocol::agent_feature_taskbar_capsule |
-        protocol::agent_feature_start_menu_three_panel_layout;
+        protocol::agent_feature_start_menu_three_panel_layout |
+        protocol::agent_feature_file_explorer_smooth_scroll;
     const bool scrollbar_features_valid =
         (configuration.feature_flags &
          protocol::agent_feature_file_explorer_custom_scrollbar) == 0 ||
@@ -712,7 +713,8 @@ Result<InjectionResult> Injector::ConfigureInternal(
             protocol::agent_feature_taskbar_capsule |
             protocol::agent_feature_taskbar_background_color |
            protocol::agent_feature_file_explorer_background_color |
-           protocol::agent_feature_file_explorer_custom_scrollbar)) == 0);
+           protocol::agent_feature_file_explorer_custom_scrollbar |
+           protocol::agent_feature_file_explorer_smooth_scroll)) == 0);
     if (configuration.magic != protocol::kAgentConfigMagic ||
         configuration.version != protocol::kAgentAbiVersion ||
         configuration.size != sizeof(configuration) ||
@@ -732,9 +734,7 @@ Result<InjectionResult> Injector::ConfigureInternal(
         std::ranges::any_of(
             configuration.reserved_tail,
             [](const std::uint8_t value) { return value != 0; }) ||
-        (configuration.feature_flags & ~known_features) != 0 ||
         !scrollbar_features_valid ||
-        !target_features_valid ||
         configuration.taskbar_opacity_milli <
             protocol::kMinimumTaskbarOpacityMilli ||
         configuration.taskbar_opacity_milli >
@@ -758,6 +758,13 @@ Result<InjectionResult> Injector::ConfigureInternal(
             std::end(configuration.explorer_title_prefix),
             L'\0') == std::end(configuration.explorer_title_prefix)) {
         return Status(ErrorCode::invalid_argument, "Invalid agent configuration ABI");
+    }
+    if ((configuration.feature_flags & ~known_features) != 0) {
+        return Status(ErrorCode::invalid_argument, "Unsupported agent feature flags");
+    }
+    if (!target_features_valid) {
+        return Status(ErrorCode::invalid_argument,
+            "Agent feature flags are not valid for this target");
     }
 
     auto canonical_path = ValidateAgentPath(agent_path);

@@ -1,4 +1,5 @@
 #include "metaplasia/injector/conflict_policy.hpp"
+#include "metaplasia/injector/injector.hpp"
 #include "metaplasia/injector/remote_image.hpp"
 #include "metaplasia/platform/process.hpp"
 
@@ -24,6 +25,56 @@ int main() {
     using metaplasia::injector::ConflictingShellCustomizer;
     using metaplasia::injector::ConflictingShellCustomizerName;
     using metaplasia::injector::IdentifyConflictingShellModule;
+
+    // Exercise the exact host gateway, not the DLL's separate validator. A
+    // relative DLL path is a sentinel: accepted configurations must reach path
+    // validation, before any process is opened or any agent can be loaded.
+    const metaplasia::injector::Injector injector;
+    for (const bool allow_load : {false, true}) {
+        const auto check = [&](const metaplasia::protocol::AgentConfiguration& configuration) {
+            return allow_load
+                ? injector.LoadAndConfigure(0, L"not-absolute.dll", configuration)
+                : injector.ConfigureLoaded(0, L"not-absolute.dll", configuration);
+        };
+        const auto reaches_path_validation = [&](const auto& configuration) {
+            const auto result = check(configuration);
+            return !result.ok() &&
+                result.status().code() == metaplasia::ErrorCode::invalid_argument &&
+                result.status().message() == "Agent path must be absolute";
+        };
+        using namespace metaplasia::protocol;
+        AgentConfiguration configuration;
+        Require(reaches_path_validation(configuration), "host accepts the base Explorer ABI");
+        configuration.feature_flags = agent_feature_file_explorer_smooth_scroll;
+        Require(reaches_path_validation(configuration),
+            "host accepts smooth scrolling without color or custom scrollbars");
+        configuration.feature_flags |= agent_feature_taskbar_clock_prefix |
+            agent_feature_taskbar_background_color | agent_feature_taskbar_capsule |
+            agent_feature_file_explorer_title_prefix |
+            agent_feature_file_explorer_background_color |
+            agent_feature_file_explorer_custom_scrollbar;
+        Require(configuration.feature_flags == 0x2DB && reaches_path_validation(configuration),
+            "host accepts the reported combined Taskbar/Explorer configuration 0x2DB");
+        configuration.target = AgentTarget::start_menu;
+        configuration.feature_flags = agent_feature_start_menu_root_opacity |
+            agent_feature_start_menu_background_color;
+        Require(reaches_path_validation(configuration), "host keeps Start configuration valid");
+        configuration.feature_flags |= agent_feature_file_explorer_smooth_scroll;
+        auto rejected = check(configuration);
+        Require(!rejected.ok() && rejected.status().message() ==
+            "Agent feature flags are not valid for this target",
+            "host rejects the Explorer-only feature for Start with a precise reason");
+        configuration = AgentConfiguration{};
+        configuration.feature_flags = 1U << 31U;
+        rejected = check(configuration);
+        Require(!rejected.ok() && rejected.status().message() == "Unsupported agent feature flags",
+            "unknown feature bits remain rejected, without blaming the ABI version");
+        configuration = AgentConfiguration{};
+        --configuration.version;
+        rejected = check(configuration);
+        Require(!rejected.ok() && rejected.status().message() == "Invalid agent configuration ABI",
+            "old ABI versions remain rejected");
+    }
 
     Require(
         IdentifyConflictingShellModule(L"windhawk.dll") ==
