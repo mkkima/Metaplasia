@@ -23,6 +23,7 @@ add_library(
     SHARED
         src/agent.cpp
         src/explorer_window_color.cpp
+        src/explorer_smooth_scroll.cpp
         src/explorer_winui_adapter.cpp
         src/agent.def
         src/start_menu_xaml_adapter.cpp

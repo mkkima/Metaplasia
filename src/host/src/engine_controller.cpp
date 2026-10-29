@@ -240,6 +240,7 @@ std::string_view CustomizationTarget(
         case protocol::CustomizationId::file_explorer_background_color:
         case protocol::CustomizationId::file_explorer_transition_animation:
         case protocol::CustomizationId::file_explorer_custom_scrollbar_enabled:
+        case protocol::CustomizationId::file_explorer_smooth_scroll_enabled:
             return "file-explorer";
         case protocol::CustomizationId::start_menu_opacity_milli:
         case protocol::CustomizationId::start_menu_hide_recommended:
@@ -282,6 +283,8 @@ std::string_view CustomizationName(
             return "file-explorer-transition-animation";
         case protocol::CustomizationId::file_explorer_custom_scrollbar_enabled:
             return "file-explorer-custom-scrollbar-enabled";
+        case protocol::CustomizationId::file_explorer_smooth_scroll_enabled:
+            return "file-explorer-smooth-scroll-enabled";
         case protocol::CustomizationId::start_menu_opacity_milli:
             return "start-menu-opacity";
         case protocol::CustomizationId::start_menu_hide_recommended:
@@ -354,7 +357,8 @@ std::string_view ProcessTargetName(
     constexpr std::uint32_t explorer_features =
         protocol::agent_feature_file_explorer_title_prefix |
         protocol::agent_feature_file_explorer_background_color |
-        protocol::agent_feature_file_explorer_custom_scrollbar;
+        protocol::agent_feature_file_explorer_custom_scrollbar |
+        protocol::agent_feature_file_explorer_smooth_scroll;
     const bool taskbar = (features & taskbar_features) != 0;
     const bool explorer = (features & explorer_features) != 0;
     if (taskbar && explorer) {
@@ -1080,6 +1084,9 @@ void EngineController::ReconcileExplorer(
         shell_explorer_compatibility.supported) {
         shell_features |=
             protocol::agent_feature_file_explorer_title_prefix;
+        if (settings.file_explorer_smooth_scroll_enabled) {
+            shell_features |= protocol::agent_feature_file_explorer_smooth_scroll;
+        }
         if (settings.file_explorer_background_color_enabled) {
             shell_features |=
                 protocol::agent_feature_file_explorer_background_color;
@@ -1130,6 +1137,10 @@ void EngineController::ReconcileExplorer(
             settings.file_explorer_enabled && compatibility_state.supported
             ? protocol::agent_feature_file_explorer_title_prefix
             : protocol::agent_feature_none;
+        if (desired_features != protocol::agent_feature_none &&
+            settings.file_explorer_smooth_scroll_enabled) {
+            desired_features |= protocol::agent_feature_file_explorer_smooth_scroll;
+        }
         if (desired_features != protocol::agent_feature_none &&
             settings.file_explorer_background_color_enabled) {
             desired_features |=

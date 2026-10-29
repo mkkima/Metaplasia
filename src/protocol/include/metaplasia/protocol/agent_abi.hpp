@@ -7,7 +7,7 @@
 namespace metaplasia::protocol {
 
 inline constexpr std::uint32_t kAgentConfigMagic = 0x4741504D;  // "MPAG"
-inline constexpr std::uint16_t kAgentAbiVersion = 11;
+inline constexpr std::uint16_t kAgentAbiVersion = 12;
 inline constexpr std::size_t kMaximumClockPrefixLength = 15;
 inline constexpr std::size_t kMaximumExplorerTitlePrefixLength = 31;
 inline constexpr std::uint32_t kDefaultTaskbarOpacityMilli = 1000;
@@ -42,6 +42,7 @@ enum AgentFeature : std::uint32_t {
     agent_feature_file_explorer_custom_scrollbar = 1U << 6U,
     agent_feature_taskbar_capsule = 1U << 7U,
     agent_feature_start_menu_three_panel_layout = 1U << 8U,
+    agent_feature_file_explorer_smooth_scroll = 1U << 9U,
 };
 
 enum class AgentResult : std::uint32_t {

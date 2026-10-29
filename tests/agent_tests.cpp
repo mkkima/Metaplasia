@@ -377,6 +377,14 @@ int wmain(const int argc, wchar_t** argv) {
         WindowTitle(externally_owned_window) == L"Next · External",
         "do not strip an externally owned prefix on disable");
 
+    configuration = ExplorerConfiguration(
+        AgentFeature::agent_feature_file_explorer_smooth_scroll, L"");
+    Require(configure(&configuration) == static_cast<std::uint32_t>(AgentResult::success),
+        "smooth scrolling configures without Explorer color or custom scrollbar");
+    Require(WindowTitle(window) == L"Other", "smooth scrolling does not change window identity");
+    configuration = ExplorerConfiguration(AgentFeature::agent_feature_none, L"");
+    Require(configure(&configuration) == static_cast<std::uint32_t>(AgentResult::success),
+        "smooth-only hooks disable cleanly");
     Require(
         stop(nullptr) == static_cast<std::uint32_t>(AgentResult::success),
         "stop agent");

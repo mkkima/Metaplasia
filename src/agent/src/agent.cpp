@@ -135,7 +135,8 @@ bool IsValidConfiguration(const AgentConfiguration* configuration) noexcept {
         AgentFeature::agent_feature_start_menu_background_color |
         AgentFeature::agent_feature_file_explorer_custom_scrollbar |
         AgentFeature::agent_feature_taskbar_capsule |
-        AgentFeature::agent_feature_start_menu_three_panel_layout;
+        AgentFeature::agent_feature_start_menu_three_panel_layout |
+        AgentFeature::agent_feature_file_explorer_smooth_scroll;
     if ((configuration->feature_flags & ~known_features) != 0) {
         return false;
     }
@@ -153,7 +154,8 @@ bool IsValidConfiguration(const AgentConfiguration* configuration) noexcept {
            AgentFeature::agent_feature_taskbar_capsule |
            AgentFeature::agent_feature_taskbar_background_color |
           AgentFeature::agent_feature_file_explorer_background_color |
-          AgentFeature::agent_feature_file_explorer_custom_scrollbar)) != 0) {
+          AgentFeature::agent_feature_file_explorer_custom_scrollbar |
+          AgentFeature::agent_feature_file_explorer_smooth_scroll)) != 0) {
         return false;
     }
     if ((configuration->feature_flags &
@@ -669,6 +671,10 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
     const bool explorer_scrollbar_required =
         (configuration.feature_flags &
          AgentFeature::agent_feature_file_explorer_custom_scrollbar) != 0;
+    const bool old_smooth_scroll_required =
+        (old_features & AgentFeature::agent_feature_file_explorer_smooth_scroll) != 0;
+    const bool smooth_scroll_required =
+        (configuration.feature_flags & AgentFeature::agent_feature_file_explorer_smooth_scroll) != 0;
     std::array<
         wchar_t,
         metaplasia::protocol::kMaximumExplorerTitlePrefixLength + 1>
@@ -721,7 +727,8 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
             explorer_color_required,
             configuration.file_explorer_background_color,
             configuration.file_explorer_transition_animation,
-            explorer_scrollbar_required);
+            explorer_scrollbar_required,
+            smooth_scroll_required);
     if (explorer_color_result != AgentResult::success) {
         static_cast<void>(EnsureExplorerTitleHook(old_explorer_hook_required));
         static_cast<void>(EnsureTimeHook(old_clock_hook_required));
@@ -729,7 +736,8 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
             old_explorer_color_required,
             old_configuration.file_explorer_background_color,
             old_configuration.file_explorer_transition_animation,
-            old_explorer_scrollbar_required));
+            old_explorer_scrollbar_required,
+            old_smooth_scroll_required));
         if (titles_restored) {
             g_features.store(old_features, std::memory_order_release);
             PrefixExistingExplorerWindows();
@@ -770,7 +778,8 @@ AgentResult ApplyConfiguration(const AgentConfiguration& configuration) noexcept
                 old_explorer_color_required,
                 old_configuration.file_explorer_background_color,
                 old_configuration.file_explorer_transition_animation,
-                old_explorer_scrollbar_required);
+                old_explorer_scrollbar_required,
+                old_smooth_scroll_required);
         // Rollback is intentionally implemented through the same adapter and
         // therefore updates its live diagnostic atomics. Restore the original
         // failure so the host and persistent log receive the actionable

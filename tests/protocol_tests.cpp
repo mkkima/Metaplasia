@@ -20,7 +20,7 @@ void Require(const bool condition, const char* message) {
 int main() {
     using namespace metaplasia::protocol;
 
-    static_assert(kProtocolVersion == 10);
+    static_assert(kProtocolVersion == 11);
     const FrameHeader prepare_update_header{
         MessageKind::prepare_update_request,
         7,
@@ -60,6 +60,7 @@ int main() {
     settings.file_explorer_transition_animation =
         kExplorerTransitionScaleFade;
     settings.file_explorer_custom_scrollbar_enabled = false;
+    settings.file_explorer_smooth_scroll_enabled = true;
     settings.start_menu_opacity_milli = 730;
     settings.start_menu_hide_recommended = true;
     settings.start_menu_background_color_enabled = true;
@@ -70,6 +71,15 @@ int main() {
     Require(encoded_settings.ok(), "settings encode");
     auto decoded_settings = DecodeSettingsResponse(encoded_settings.value());
     Require(decoded_settings.ok(), "settings decode");
+    Require(decoded_settings.value().file_explorer_smooth_scroll_enabled,
+        "smooth-scroll settings roundtrip");
+    auto invalid_scroll_settings = encoded_settings.value();
+    invalid_scroll_settings.back() = std::byte{2};
+    Require(!DecodeSettingsResponse(invalid_scroll_settings).ok(),
+        "settings reject non-boolean smooth-scroll flag");
+    invalid_scroll_settings.pop_back();
+    Require(!DecodeSettingsResponse(invalid_scroll_settings).ok(),
+        "settings reject a missing smooth-scroll flag");
     Require(decoded_settings.value().taskbar_enabled, "settings boolean roundtrip");
     Require(
         decoded_settings.value().taskbar_opacity_milli == 820 &&
@@ -214,6 +224,19 @@ int main() {
             decoded_animation.value().integer_value ==
                 kExplorerTransitionSlideFade,
         "Explorer animation command roundtrip");
+
+    Require(decoded_settings.value().file_explorer_smooth_scroll_enabled,
+            "smooth scrolling survives settings protocol roundtrip");
+    const SetCustomizationRequest smooth_command{
+        CustomizationId::file_explorer_smooth_scroll_enabled, {}, 0, true};
+    auto encoded_smooth = EncodeSetCustomizationRequest(smooth_command);
+    Require(encoded_smooth.ok(), "smooth-scroll toggle encodes");
+    auto decoded_smooth = DecodeSetCustomizationRequest(encoded_smooth.value());
+    Require(decoded_smooth.ok() && decoded_smooth.value().boolean_value,
+            "smooth-scroll toggle roundtrip");
+    encoded_smooth.value().back() = std::byte{2};
+    Require(!DecodeSetCustomizationRequest(encoded_smooth.value()).ok(),
+            "non-boolean smooth-scroll payload is rejected");
 
     const SetCustomizationRequest scrollbar_command{
         CustomizationId::file_explorer_custom_scrollbar_enabled,

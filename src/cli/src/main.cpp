@@ -145,6 +145,7 @@ void PrintUsage() {
         << "  metaplasia-cli set explorer-color-enabled <true|false>\n"
         << "  metaplasia-cli set explorer-animation <none|fade|slide|scale>\n"
         << "  metaplasia-cli set explorer-custom-scrollbar-enabled <true|false>\n"
+        << "  metaplasia-cli set explorer-smooth-scroll-enabled <true|false>\n"
         << "  metaplasia-cli set start-menu-opacity <10-100>\n"
         << "  metaplasia-cli set start-menu-color <#RRGGBB>\n"
         << "  metaplasia-cli set start-menu-color-enabled <true|false>\n"
@@ -678,6 +679,9 @@ int wmain(const int argc, wchar_t** argv) {
                     ? "true"
                     : "false")
             << '\n'
+            << "file-explorer-smooth-scroll-enabled="
+            << (settings.value().file_explorer_smooth_scroll_enabled ? "true" : "false")
+            << '\n'
             << "start-menu-enabled="
             << (settings.value().start_menu_enabled ? "true" : "false")
             << '\n'
@@ -861,6 +865,7 @@ int wmain(const int argc, wchar_t** argv) {
             setting == L"taskbar-color-enabled" ||
             setting == L"explorer-color-enabled" ||
             setting == L"explorer-custom-scrollbar-enabled" ||
+            setting == L"explorer-smooth-scroll-enabled" ||
             setting == L"start-menu-color-enabled" ||
             setting == L"start-menu-three-panel-layout-enabled" ||
             setting == L"start-menu-hide-all-apps") {
@@ -898,6 +903,9 @@ int wmain(const int argc, wchar_t** argv) {
             } else if (setting == L"explorer-custom-scrollbar-enabled") {
                 command.customization = metaplasia::protocol::CustomizationId::
                     file_explorer_custom_scrollbar_enabled;
+            } else if (setting == L"explorer-smooth-scroll-enabled") {
+                command.customization = metaplasia::protocol::CustomizationId::
+                    file_explorer_smooth_scroll_enabled;
             } else if (
                 setting == L"start-menu-three-panel-layout-enabled") {
                 command.customization = metaplasia::protocol::CustomizationId::

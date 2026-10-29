@@ -102,6 +102,7 @@ int main() {
     expected.file_explorer_transition_animation =
         metaplasia::protocol::kExplorerTransitionScaleFade;
     expected.file_explorer_custom_scrollbar_enabled = false;
+    expected.file_explorer_smooth_scroll_enabled = true;
     expected.start_menu_opacity_milli = 730;
     expected.start_menu_hide_recommended = true;
     expected.start_menu_background_color_enabled = true;
@@ -182,7 +183,15 @@ int main() {
         duplicate.status().code() == ErrorCode::invalid_data,
         "duplicate key reports invalid data");
 
-    WriteText(settings_path, "version=10\ntaskbar_enabled=1\n");
+    Require(loaded.value().file_explorer_smooth_scroll_enabled, "smooth scrolling persists");
+    WriteText(settings_path, "version=9\nfile_explorer_enabled=1\n");
+    const auto before_smooth_scroll = store.Load();
+    Require(before_smooth_scroll.ok() && !before_smooth_scroll.value().file_explorer_smooth_scroll_enabled &&
+            before_smooth_scroll.value().file_explorer_enabled,
+            "version 9 migrates with smooth scrolling off and existing settings preserved");
+    WriteText(settings_path, "version=10\nfile_explorer_smooth_scroll_enabled=2\n");
+    Require(!store.Load().ok(), "invalid persisted smooth-scroll boolean rejected");
+    WriteText(settings_path, "version=11\ntaskbar_enabled=1\n");
     const auto future_version = store.Load();
     Require(!future_version.ok(), "unsupported version rejected");
     Require(

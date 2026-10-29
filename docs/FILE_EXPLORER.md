@@ -1,5 +1,37 @@
 # File Explorer adapter
 
+## Smooth mouse-wheel scrolling
+
+Enable **File Explorer → Scrolling → Smooth scrolling** with the Explorer
+target enabled. The setting is off by default, persisted independently of
+Explorer colors and custom scrollbars, and can also be changed with
+`metaplasia-cli set explorer-smooth-scroll-enabled true`.
+
+The main `UIItemsView` file list interpolates ordinary vertical wheel input over
+160 ms through its native UI Automation Scroll pattern. No content is captured
+or rendered in a replacement view. High-resolution/partial wheel deltas, Ctrl/Shift
+modifiers, horizontal scrolling, keys, and scrollbar dragging remain native.
+The system's wheel-line/page preference and disabled client-area animations
+are respected. Unsupported views/providers fall back to native scrolling.
+Navigation, other scrolling input, window teardown, or disabling the feature
+cancels outstanding animation. A provider failure before the first frame
+replays the original wheel input once; a partially applied gesture is never
+replayed, avoiding a double scroll.
+
+COM references and scroll writes stay on the existing MTA event worker, not
+the Explorer UI thread. Its 16 ms wakeup exists only during an animation;
+idle waiting remains unbounded. Target and pending-input storage is bounded
+to 32 owned file-list windows, with a per-window identity guarding HWND reuse.
+Deterministic policy tests and a hidden, owned UI Automation provider test
+cover interpolation, cancellation, native fallback, and disabled/idle state.
+They do not certify visual rendering in every Explorer view or Windows build.
+
+This addition uses wire protocol 11 / agent ABI 12. All portable binaries must
+be replaced together. Settings format 10 adds the switch; formats through 9
+retain their values and default smooth scrolling to off.
+
+## Existing appearance and window identity adapters
+
 File Explorer windows do not necessarily live in the process that owns the
 Taskbar. Metaplasia enumerates top-level `CabinetWClass` and `ExploreWClass`
 windows, maps them to same-session `explorer.exe` processes, and applies the

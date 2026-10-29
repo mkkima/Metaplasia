@@ -185,6 +185,23 @@ target_link_libraries(
 metaplasia_configure_target(metaplasia_shell_xaml_style_tests)
 add_test(NAME shell_xaml_style COMMAND metaplasia_shell_xaml_style_tests)
 
+add_executable(metaplasia_smooth_scroll_tests smooth_scroll_tests.cpp)
+target_include_directories(metaplasia_smooth_scroll_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/agent/include)
+metaplasia_configure_target(metaplasia_smooth_scroll_tests)
+add_test(NAME explorer_smooth_scroll COMMAND metaplasia_smooth_scroll_tests)
+
+add_executable(metaplasia_smooth_scroll_runtime_tests
+    explorer_smooth_scroll_runtime_tests.cpp
+    ../src/agent/src/explorer_smooth_scroll.cpp)
+target_include_directories(metaplasia_smooth_scroll_runtime_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/agent/include)
+target_link_libraries(metaplasia_smooth_scroll_runtime_tests PRIVATE
+    ole32 oleaut32 uiautomationcore)
+metaplasia_configure_target(metaplasia_smooth_scroll_runtime_tests)
+add_test(NAME explorer_smooth_scroll_runtime COMMAND metaplasia_smooth_scroll_runtime_tests)
+set_tests_properties(explorer_smooth_scroll_runtime PROPERTIES TIMEOUT 20)
+
 add_executable(
     metaplasia_agent_tests
         agent_tests.cpp

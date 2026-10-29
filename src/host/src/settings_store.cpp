@@ -239,6 +239,10 @@ Result<bool> HostSettings::SetCustomization(
                 request.boolean_value;
             file_explorer_custom_scrollbar_enabled = request.boolean_value;
             break;
+        case protocol::CustomizationId::file_explorer_smooth_scroll_enabled:
+            changed = file_explorer_smooth_scroll_enabled != request.boolean_value;
+            file_explorer_smooth_scroll_enabled = request.boolean_value;
+            break;
         case protocol::CustomizationId::start_menu_opacity_milli:
             changed = start_menu_opacity_milli != request.integer_value;
             start_menu_opacity_milli = request.integer_value;
@@ -325,7 +329,8 @@ protocol::CustomizationSettings HostSettings::ToProtocol() const {
         start_menu_background_color_enabled,
         start_menu_background_color,
         start_menu_three_panel_layout_enabled,
-        start_menu_hide_all_apps};
+        start_menu_hide_all_apps,
+        file_explorer_smooth_scroll_enabled};
 }
 
 SettingsStore::SettingsStore(std::filesystem::path path)
@@ -401,7 +406,7 @@ Result<HostSettings> SettingsStore::Load() const {
         if (key == "version") {
             version_seen = true;
             auto parsed = ParseUnsigned(value);
-            if (!parsed.ok() || parsed.value() < 1U || parsed.value() > 9U) {
+            if (!parsed.ok() || parsed.value() < 1U || parsed.value() > 10U) {
                 return Status(
                     ErrorCode::incompatible,
                     "Unsupported settings format version");
@@ -526,6 +531,12 @@ Result<HostSettings> SettingsStore::Load() const {
             settings.file_explorer_custom_scrollbar_enabled = parsed.value();
             continue;
         }
+        if (key == "file_explorer_smooth_scroll_enabled") {
+            auto parsed = ParseBoolean(value);
+            if (!parsed.ok()) { return parsed.status(); }
+            settings.file_explorer_smooth_scroll_enabled = parsed.value();
+            continue;
+        }
         if (key == "start_menu_opacity_milli") {
             auto parsed = ParseUnsigned(value);
             if (!parsed.ok()) {
@@ -644,6 +655,9 @@ Result<HostSettings> SettingsStore::Load() const {
     if (settings_version < 9U) {
         settings.start_menu_hide_all_apps = false;
     }
+    if (settings_version < 10U) {
+        settings.file_explorer_smooth_scroll_enabled = false;
+    }
     auto valid = settings.Validate();
     if (!valid.ok()) {
         return valid.status();
@@ -669,7 +683,7 @@ Result<void> SettingsStore::Save(const HostSettings& settings) const {
     }
 
     const std::string contents =
-        "version=9\n"
+        "version=10\n"
         "taskbar_enabled=" +
         std::string(settings.taskbar_enabled ? "1\n" : "0\n") +
         "file_explorer_enabled=" +
@@ -705,6 +719,8 @@ Result<void> SettingsStore::Save(const HostSettings& settings) const {
         "file_explorer_custom_scrollbar_enabled=" +
         std::string(
             settings.file_explorer_custom_scrollbar_enabled ? "1\n" : "0\n") +
+        "file_explorer_smooth_scroll_enabled=" +
+        std::string(settings.file_explorer_smooth_scroll_enabled ? "1\n" : "0\n") +
         "start_menu_opacity_milli=" +
         std::to_string(settings.start_menu_opacity_milli) + "\n" +
         "start_menu_hide_recommended=" +

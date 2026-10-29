@@ -147,7 +147,9 @@ bool WriteCustomizationSettings(
             writer.Write(static_cast<std::uint8_t>(
                 settings.start_menu_three_panel_layout_enabled ? 1 : 0)) &&
             writer.Write(static_cast<std::uint8_t>(
-                settings.start_menu_hide_all_apps ? 1 : 0));
+                settings.start_menu_hide_all_apps ? 1 : 0)) &&
+            writer.Write(static_cast<std::uint8_t>(
+                settings.file_explorer_smooth_scroll_enabled ? 1 : 0));
 }
 
 bool ReadCustomizationSettings(
@@ -167,6 +169,7 @@ bool ReadCustomizationSettings(
     std::uint8_t start_menu_background_color_enabled = 0;
     std::uint8_t start_menu_three_panel_layout_enabled = 0;
     std::uint8_t start_menu_hide_all_apps = 0;
+    std::uint8_t file_explorer_smooth_scroll_enabled = 0;
     if (!reader.Read(taskbar_enabled) || !reader.Read(file_explorer_enabled) ||
         !reader.Read(start_menu_enabled) ||
         !reader.ReadString(settings.taskbar_clock_prefix) ||
@@ -188,6 +191,7 @@ bool ReadCustomizationSettings(
         !reader.Read(settings.start_menu_background_color) ||
         !reader.Read(start_menu_three_panel_layout_enabled) ||
         !reader.Read(start_menu_hide_all_apps) ||
+        !reader.Read(file_explorer_smooth_scroll_enabled) ||
         taskbar_enabled > 1 ||
         file_explorer_enabled > 1 || start_menu_enabled > 1 ||
         hide_notification_center > 1 || hide_control_center > 1 ||
@@ -197,7 +201,7 @@ bool ReadCustomizationSettings(
         file_explorer_custom_scrollbar_enabled > 1 || hide_recommended > 1 ||
         start_menu_background_color_enabled > 1 ||
         start_menu_three_panel_layout_enabled > 1 ||
-        start_menu_hide_all_apps > 1) {
+        start_menu_hide_all_apps > 1 || file_explorer_smooth_scroll_enabled > 1) {
         return false;
     }
     settings.taskbar_enabled = taskbar_enabled != 0;
@@ -220,6 +224,7 @@ bool ReadCustomizationSettings(
     settings.start_menu_three_panel_layout_enabled =
         start_menu_three_panel_layout_enabled != 0;
     settings.start_menu_hide_all_apps = start_menu_hide_all_apps != 0;
+    settings.file_explorer_smooth_scroll_enabled = file_explorer_smooth_scroll_enabled != 0;
     return IsValidCustomizationSettings(settings);
 }
 
@@ -237,7 +242,7 @@ bool IsValidRuntimeState(const RuntimeState state) noexcept {
 bool IsValidCustomizationId(const CustomizationId customization) noexcept {
     return customization >= CustomizationId::taskbar_clock_prefix &&
            customization <=
-               CustomizationId::start_menu_hide_all_apps;
+               CustomizationId::file_explorer_smooth_scroll_enabled;
 }
 
 bool IsValidCustomizationSettings(
@@ -414,6 +419,7 @@ Result<std::vector<std::byte>> EncodeSetCustomizationRequest(
         case CustomizationId::file_explorer_background_color_enabled:
         case CustomizationId::start_menu_background_color_enabled:
         case CustomizationId::file_explorer_custom_scrollbar_enabled:
+        case CustomizationId::file_explorer_smooth_scroll_enabled:
         case CustomizationId::start_menu_three_panel_layout_enabled:
         case CustomizationId::start_menu_hide_all_apps:
             if (!request.text_value.empty() || request.integer_value != 0) {
@@ -492,6 +498,7 @@ Result<SetCustomizationRequest> DecodeSetCustomizationRequest(
         case CustomizationId::file_explorer_background_color_enabled:
         case CustomizationId::start_menu_background_color_enabled:
         case CustomizationId::file_explorer_custom_scrollbar_enabled:
+        case CustomizationId::file_explorer_smooth_scroll_enabled:
         case CustomizationId::start_menu_three_panel_layout_enabled:
         case CustomizationId::start_menu_hide_all_apps: {
             std::uint8_t value = 0;

@@ -39,6 +39,7 @@ struct HostSettings final {
         protocol::kDefaultShellBackgroundColor};
     bool start_menu_three_panel_layout_enabled{false};
     bool start_menu_hide_all_apps{false};
+    bool file_explorer_smooth_scroll_enabled{false};
 
     [[nodiscard]] bool Enabled(protocol::TargetId target) const noexcept;
     [[nodiscard]] bool SetEnabled(

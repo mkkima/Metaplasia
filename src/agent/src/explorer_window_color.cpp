@@ -1,6 +1,7 @@
 #include "metaplasia/agent/explorer_window_color.hpp"
 
 #include "metaplasia/agent/explorer_winui_adapter.hpp"
+#include "metaplasia/agent/explorer_smooth_scroll.hpp"
 
 #include <MinHook.h>
 #include <UIAutomation.h>
@@ -67,6 +68,7 @@ constexpr UINT_PTR kExplorerDirectUiSubclassId = 0x4D445549U;  // "MDUI"
 constexpr UINT_PTR kDirectUiTransitionTimerId = 0x4D445554U;  // "MDUT"
 constexpr UINT kDirectUiTransitionStartMessage = WM_APP + 0x4D5U;
 constexpr UINT kDirectUiScrollbarRefreshThreadMessage = WM_APP + 0x4D6U;
+constexpr UINT kDirectUiDetachControlsMessage = WM_APP + 0x4D9U;
 constexpr UINT_PTR kDirectUiScrollbarPaintTimerId = 0x4D445350U;  // "MDSP"
 constexpr DWORD kDirectUiTransitionHoldMilliseconds = 80;
 constexpr DWORD kDirectUiTransitionFadeMilliseconds = 150;
@@ -879,7 +881,7 @@ BOOL CALLBACK RegisterDirectUiOverlayClass(
     const HWND direct_ui_window,
     const bool create_if_missing,
     const bool restart_deadline) noexcept {
-    if (direct_ui_window == nullptr ||
+    if (!g_enabled.load(std::memory_order_acquire) || direct_ui_window == nullptr ||
         !ClassNameEquals(direct_ui_window, L"DirectUIHWND")) {
         return nullptr;
     }
@@ -1026,8 +1028,9 @@ void DestroyDirectUiTransitionOverlay(const HWND explorer_window) noexcept {
 
 void RequestDirectUiScrollbarMetrics(
     const HWND direct_ui_window) noexcept {
-    if (!g_enabled.load(std::memory_order_acquire) ||
-        !g_custom_scrollbar_enabled.load(std::memory_order_acquire) ||
+    if ((!ExplorerSmoothScrollEnabled() &&
+         !(g_enabled.load(std::memory_order_acquire) &&
+           g_custom_scrollbar_enabled.load(std::memory_order_acquire))) ||
         !::IsWindow(direct_ui_window) ||
         !ClassNameEquals(direct_ui_window, L"DirectUIHWND")) {
         return;
@@ -1166,6 +1169,7 @@ LRESULT CALLBACK ExplorerDirectUiSubclassProc(
     const UINT_PTR,
     DWORD_PTR) noexcept {
     if (message == WM_NCDESTROY) {
+        CancelExplorerSmoothScroll(window, true);
         static_cast<void>(::RemovePropW(
             window, kDirectUiScrollbarRefreshPendingProperty));
         DestroyDirectUiScrollbarOverlay(window);
@@ -1175,6 +1179,17 @@ LRESULT CALLBACK ExplorerDirectUiSubclassProc(
             &ExplorerDirectUiSubclassProc,
             kExplorerDirectUiSubclassId));
         return ::DefSubclassProc(window, message, wparam, lparam);
+    }
+    if (message == kSmoothScrollNativeWheelMessage) {
+        return ::DefSubclassProc(window, WM_MOUSEWHEEL, wparam, lparam);
+    }
+    if (message == WM_MOUSEWHEEL && HandleExplorerSmoothWheel(window, wparam, lparam)) {
+        return 0;
+    }
+    if (message == WM_KEYDOWN || message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN ||
+        message == WM_MBUTTONDOWN || message == WM_VSCROLL || message == WM_HSCROLL ||
+        message == WM_MOUSEHWHEEL || message == WM_SIZE || message == WM_SHOWWINDOW) {
+        CancelExplorerSmoothScroll(window);
     }
     if (message == WM_ERASEBKGND &&
         g_enabled.load(std::memory_order_acquire) && wparam != 0) {
@@ -1189,8 +1204,8 @@ LRESULT CALLBACK ExplorerDirectUiSubclassProc(
         static_cast<void>(ShowDirectUiTransitionOverlay(
             window, false, false));
     }
-    if (g_enabled.load(std::memory_order_acquire) &&
-        g_custom_scrollbar_enabled.load(std::memory_order_acquire) &&
+    if ((ExplorerSmoothScrollEnabled() || (g_enabled.load(std::memory_order_acquire) &&
+         g_custom_scrollbar_enabled.load(std::memory_order_acquire))) &&
         (message == WM_PAINT || message == WM_SHOWWINDOW ||
          message == WM_WINDOWPOSCHANGED || message == WM_MOUSEWHEEL ||
          message == WM_VSCROLL || message == WM_KEYDOWN)) {
@@ -1200,6 +1215,7 @@ LRESULT CALLBACK ExplorerDirectUiSubclassProc(
 }
 
 void DetachExplorerDirectUiSubclass(const HWND window) noexcept {
+    CancelExplorerSmoothScroll(window, true);
     static_cast<void>(::RemovePropW(
         window, kDirectUiScrollbarRefreshPendingProperty));
     DestroyDirectUiScrollbarOverlay(window);
@@ -1219,7 +1235,8 @@ void DetachExplorerDirectUiSubclass(const HWND window) noexcept {
 }
 
 void AttachExplorerDirectUiSubclass(const HWND window) noexcept {
-    if (window == nullptr ||
+    if ((!g_enabled.load(std::memory_order_acquire) && !ExplorerSmoothScrollEnabled()) ||
+        window == nullptr ||
         !ClassNameEquals(window, L"DirectUIHWND") ||
         !IsCurrentProcessExplorerWindow(::GetAncestor(window, GA_ROOT)) ||
         ::GetWindowThreadProcessId(window, nullptr) !=
@@ -1242,6 +1259,7 @@ void AttachExplorerDirectUiSubclass(const HWND window) noexcept {
     if (!attached) {
         return;
     }
+    AttachExplorerSmoothScrollWindow(window);
     const HWND root = ::GetAncestor(window, GA_ROOT);
     if (root != nullptr) {
         static_cast<void>(::SetWindowSubclass(
@@ -1250,7 +1268,7 @@ void AttachExplorerDirectUiSubclass(const HWND window) noexcept {
             kExplorerScrollbarOwnerSubclassId,
             0));
     }
-    if (g_custom_scrollbar_enabled.load(std::memory_order_acquire)) {
+    if (ExplorerSmoothScrollEnabled() || g_custom_scrollbar_enabled.load(std::memory_order_acquire)) {
         RequestDirectUiScrollbarMetrics(window);
     } else {
         DestroyDirectUiScrollbarOverlay(window);
@@ -1263,7 +1281,7 @@ BOOL CALLBACK AttachExistingDirectUiSubclass(
     if (!ClassNameEquals(window, L"DirectUIHWND")) {
         return TRUE;
     }
-    if (!g_custom_scrollbar_enabled.load(std::memory_order_acquire)) {
+    if (!ExplorerSmoothScrollEnabled() && !g_custom_scrollbar_enabled.load(std::memory_order_acquire)) {
         QueueDirectUiScrollbarMetrics(window, 0, 0);
     } else {
         AttachExplorerDirectUiSubclass(window);
@@ -1278,6 +1296,10 @@ LRESULT CALLBACK ExplorerUiThreadCallWndProc(
     const LPARAM lparam) noexcept {
     if (code >= 0 && lparam != 0) {
         const auto* message = reinterpret_cast<const CWPSTRUCT*>(lparam);
+        if (message->message == kDirectUiDetachControlsMessage &&
+            IsCurrentProcessExplorerWindow(message->hwnd)) {
+            DetachExplorerNativeControlsForWindow(message->hwnd);
+        }
         if (ClassNameEquals(message->hwnd, L"DirectUIHWND")) {
             if (message->message == WM_NCCREATE ||
                 message->message == WM_CREATE ||
@@ -1476,6 +1498,8 @@ void DeliverDirectUiScrollbarMetrics(
     const HWND direct_ui_window,
     const std::uint16_t scroll_percent,
     const std::uint16_t view_percent) noexcept {
+    if (!g_enabled.load(std::memory_order_acquire) ||
+        !g_custom_scrollbar_enabled.load(std::memory_order_acquire)) { return; }
     QueueDirectUiScrollbarMetrics(
         direct_ui_window, scroll_percent, view_percent);
 }
@@ -1488,8 +1512,9 @@ void RefreshDirectUiScrollbarMetrics(
         direct_ui_window,
         kDirectUiScrollbarRefreshPendingProperty));
     if (automation == nullptr || scroll_condition == nullptr ||
-        !g_enabled.load(std::memory_order_acquire) ||
-        !g_custom_scrollbar_enabled.load(std::memory_order_acquire) ||
+        (!ExplorerSmoothScrollEnabled() &&
+         !(g_enabled.load(std::memory_order_acquire) &&
+           g_custom_scrollbar_enabled.load(std::memory_order_acquire))) ||
         !::IsWindow(direct_ui_window) ||
         !ClassNameEquals(direct_ui_window, L"DirectUIHWND") ||
         !IsCurrentProcessExplorerWindow(
@@ -1501,6 +1526,7 @@ void RefreshDirectUiScrollbarMetrics(
     const HRESULT root_result =
         automation->ElementFromHandle(direct_ui_window, &root);
     if (FAILED(root_result) || root == nullptr) {
+        CancelExplorerSmoothScroll(direct_ui_window);
         return;
     }
     IUIAutomationElement* scroll_element = nullptr;
@@ -1510,9 +1536,11 @@ void RefreshDirectUiScrollbarMetrics(
         &scroll_element);
     root->Release();
     if (FAILED(element_result)) {
+        CancelExplorerSmoothScroll(direct_ui_window);
         return;
     }
     if (scroll_element == nullptr) {
+        CancelExplorerSmoothScroll(direct_ui_window);
         DeliverDirectUiScrollbarMetrics(direct_ui_window, 0, 0);
         return;
     }
@@ -1527,6 +1555,7 @@ void RefreshDirectUiScrollbarMetrics(
     if (FAILED(bounds_result) ||
         !::GetWindowRect(direct_ui_window, &direct_ui_bounds)) {
         scroll_element->Release();
+        CancelExplorerSmoothScroll(direct_ui_window);
         return;
     }
     if (!nearly_equal(scroll_bounds.left, direct_ui_bounds.left) ||
@@ -1534,6 +1563,7 @@ void RefreshDirectUiScrollbarMetrics(
         !nearly_equal(scroll_bounds.right, direct_ui_bounds.right) ||
         !nearly_equal(scroll_bounds.bottom, direct_ui_bounds.bottom)) {
         scroll_element->Release();
+        CancelExplorerSmoothScroll(direct_ui_window);
         DeliverDirectUiScrollbarMetrics(direct_ui_window, 0, 0);
         return;
     }
@@ -1543,8 +1573,9 @@ void RefreshDirectUiScrollbarMetrics(
         UIA_ScrollPatternId,
         IID_IUIAutomationScrollPattern,
         reinterpret_cast<void**>(&scroll_pattern));
-    scroll_element->Release();
     if (FAILED(pattern_result) || scroll_pattern == nullptr) {
+        scroll_element->Release();
+        CancelExplorerSmoothScroll(direct_ui_window);
         return;
     }
     BOOL vertically_scrollable = FALSE;
@@ -1557,13 +1588,20 @@ void RefreshDirectUiScrollbarMetrics(
             &scroll_percent)) &&
         SUCCEEDED(scroll_pattern->get_CurrentVerticalViewSize(
             &view_percent));
+    const bool visible = metrics_valid && vertically_scrollable != FALSE &&
+        scroll_percent >= 0.0 && scroll_percent <= 100.0 &&
+        view_percent > 0.0 && view_percent < 100.0;
+    if (visible) {
+        RegisterExplorerSmoothScrollTarget(direct_ui_window, automation, scroll_element,
+            scroll_pattern, view_percent, scroll_bounds);
+    } else {
+        CancelExplorerSmoothScroll(direct_ui_window);
+    }
     scroll_pattern->Release();
+    scroll_element->Release();
     if (!metrics_valid) {
         return;
     }
-    const bool visible = vertically_scrollable != FALSE &&
-        scroll_percent >= 0.0 && scroll_percent <= 100.0 &&
-        view_percent > 0.0 && view_percent < 100.0;
     if (!visible) {
         DeliverDirectUiScrollbarMetrics(direct_ui_window, 0, 0);
         return;
@@ -1657,14 +1695,19 @@ DWORD WINAPI DirectUiEventMonitorThread(void*) noexcept {
         return 1;
     }
 
+    StartExplorerSmoothScrollWorker();
     bool stopping = false;
     while (!stopping) {
         const DWORD wait_result = ::MsgWaitForMultipleObjects(
             1,
             &g_direct_ui_event_stop,
             FALSE,
-            INFINITE,
+            ExplorerSmoothScrollWaitMilliseconds(),
             QS_ALLINPUT);
+        if (wait_result == WAIT_TIMEOUT) {
+            AdvanceExplorerSmoothScroll();
+            continue;
+        }
         if (wait_result == WAIT_OBJECT_0) {
             break;
         }
@@ -1678,6 +1721,10 @@ DWORD WINAPI DirectUiEventMonitorThread(void*) noexcept {
                 stopping = true;
                 break;
             }
+            if (message.hwnd == nullptr && message.message == kSmoothScrollWorkerMessage) {
+                ProcessExplorerSmoothScrollRequest(reinterpret_cast<HWND>(message.wParam));
+                continue;
+            }
             if (message.hwnd == nullptr &&
                 message.message == kDirectUiScrollbarRefreshThreadMessage) {
                 RefreshDirectUiScrollbarMetrics(
@@ -1689,7 +1736,9 @@ DWORD WINAPI DirectUiEventMonitorThread(void*) noexcept {
             static_cast<void>(::TranslateMessage(&message));
             static_cast<void>(::DispatchMessageW(&message));
         }
+        AdvanceExplorerSmoothScroll();
     }
+    StopExplorerSmoothScrollWorker();
     static_cast<void>(::UnhookWinEvent(scroll_hook));
     static_cast<void>(::UnhookWinEvent(hook));
     scroll_condition->Release();
@@ -2360,6 +2409,10 @@ LRESULT CALLBACK ExplorerScrollbarOwnerSubclassProc(
     const LPARAM lparam,
     const UINT_PTR,
     const DWORD_PTR) noexcept {
+    if (message == kDirectUiDetachControlsMessage) {
+        DetachExplorerNativeControlsForWindow(window);
+        return 0;
+    }
     if (message == WM_NULL) {
         ApplyPendingDirectUiScrollbarMetrics(window);
     }
@@ -2969,11 +3022,37 @@ struct HookDefinition final {
     return protocol::AgentResult::success;
 }
 
+BOOL CALLBACK DetachNativeControlsForStop(HWND window, LPARAM context) noexcept {
+    if (!IsCurrentProcessExplorerWindow(window)) { return TRUE; }
+    DWORD_PTR delivered{};
+    if (!::SendMessageTimeoutW(window, kDirectUiDetachControlsMessage, 0, 0,
+            SMTO_ABORTIFHUNG | SMTO_BLOCK, kTreeViewMessageTimeoutMilliseconds, &delivered)) {
+        *reinterpret_cast<bool*>(context) = false;
+    }
+    return TRUE;
+}
+
+BOOL CALLBACK AttachSmoothOnlyWindow(HWND window, LPARAM context) noexcept {
+    if (!IsCurrentProcessExplorerWindow(window)) { return TRUE; }
+    if (!EnsureExplorerUiThreadHook(window)) {
+        if (context) { *reinterpret_cast<bool*>(context) = false; }
+        return TRUE;
+    }
+    static_cast<void>(::EnumChildWindows(window, &AttachExistingDirectUiSubclass, 0));
+    return TRUE;
+}
+
 [[nodiscard]] protocol::AgentResult RemoveHooks() noexcept {
     ::AcquireSRWLockExclusive(&g_hooks_lock);
     if (!g_hooks_installed) {
         ::ReleaseSRWLockExclusive(&g_hooks_lock);
         return protocol::AgentResult::success;
+    }
+    bool detached = true;
+    static_cast<void>(::EnumWindows(&DetachNativeControlsForStop, reinterpret_cast<LPARAM>(&detached)));
+    if (!detached) {
+        ::ReleaseSRWLockExclusive(&g_hooks_lock);
+        return protocol::AgentResult::hook_failed;
     }
     RemoveExplorerUiThreadHooks();
     const HMODULE dwmapi = ::GetModuleHandleW(L"dwmapi.dll");
@@ -3125,7 +3204,8 @@ protocol::AgentResult ConfigureExplorerWindowColor(
     const bool enabled,
     const std::uint32_t argb,
     const std::uint32_t transition_animation,
-    const bool custom_scrollbar_enabled) noexcept {
+    const bool custom_scrollbar_enabled,
+    const bool smooth_scroll_enabled) noexcept {
     if ((argb & 0xFF000000U) != 0xFF000000U ||
         transition_animation > protocol::kMaximumExplorerTransition) {
         return protocol::AgentResult::invalid_configuration;
@@ -3134,12 +3214,22 @@ protocol::AgentResult ConfigureExplorerWindowColor(
         transition_animation, std::memory_order_release);
     g_custom_scrollbar_enabled.store(
         custom_scrollbar_enabled, std::memory_order_release);
+    SetExplorerSmoothScrollEnabled(smooth_scroll_enabled);
 
     if (!enabled) {
         g_enabled.store(false, std::memory_order_release);
         const auto winui_result = ConfigureExplorerWinUiColor(false, argb);
         const HRESULT tree_views_restored = RestoreAllTreeViews();
         const HRESULT restored = RestoreAllWindows();
+        if (smooth_scroll_enabled && winui_result == protocol::AgentResult::success &&
+            SUCCEEDED(tree_views_restored) && SUCCEEDED(restored)) {
+            const auto hooks = InstallHooks();
+            if (hooks != protocol::AgentResult::success) { return hooks; }
+            bool attached = true;
+            static_cast<void>(::EnumWindows(&AttachSmoothOnlyWindow, reinterpret_cast<LPARAM>(&attached)));
+            RedrawAllExplorerWindows();
+            return attached ? protocol::AgentResult::success : protocol::AgentResult::hook_failed;
+        }
         RedrawAllExplorerWindows();
         const auto hooks_result =
             winui_result == protocol::AgentResult::success &&
@@ -3188,6 +3278,11 @@ protocol::AgentResult ConfigureExplorerWindowColor(
 }
 
 void ObserveExplorerWindowForColor(const HWND window) noexcept {
+    if (ExplorerSmoothScrollEnabled() && IsCurrentProcessExplorerWindow(window)) {
+        static_cast<void>(::EnumChildWindows(window,
+            [](HWND child, LPARAM) -> BOOL { CancelExplorerSmoothScroll(child); return TRUE; }, 0));
+        static_cast<void>(AttachSmoothOnlyWindow(window, 0));
+    }
     if (!g_enabled.load(std::memory_order_acquire) ||
         !IsCurrentProcessExplorerWindow(window)) {
         return;
@@ -3238,6 +3333,7 @@ void DetachExplorerNativeControlsForWindow(const HWND window) noexcept {
 
 protocol::AgentResult StopExplorerWindowColor() noexcept {
     g_enabled.store(false, std::memory_order_release);
+    SetExplorerSmoothScrollEnabled(false);
     g_custom_scrollbar_enabled.store(false, std::memory_order_release);
     const protocol::AgentResult winui_result = StopExplorerWinUiColor();
     const HRESULT tree_views_restored = RestoreAllTreeViews();

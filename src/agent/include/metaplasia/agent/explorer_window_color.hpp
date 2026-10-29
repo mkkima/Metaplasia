@@ -12,7 +12,8 @@ namespace metaplasia::agent {
     bool enabled,
     std::uint32_t argb,
     std::uint32_t transition_animation,
-    bool custom_scrollbar_enabled) noexcept;
+    bool custom_scrollbar_enabled,
+    bool smooth_scroll_enabled = false) noexcept;
 
 // Called from the existing Explorer window-title hook whenever Explorer
 // creates or updates a folder window. This keeps newly opened windows in sync

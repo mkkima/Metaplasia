@@ -1222,6 +1222,7 @@ function applySettings(settings) {
     taskbarBackgroundColorEnabled: settings.taskbarBackgroundColorEnabled,
     explorerBackgroundColorEnabled: settings.fileExplorerBackgroundColorEnabled,
     explorerCustomScrollbarEnabled: settings.fileExplorerCustomScrollbarEnabled,
+    explorerSmoothScrollEnabled: settings.fileExplorerSmoothScrollEnabled,
     startBackgroundColorEnabled: settings.startMenuBackgroundColorEnabled
   };
   Object.entries(toggles).forEach(([id, checked]) => {

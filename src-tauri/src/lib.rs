@@ -71,6 +71,7 @@ struct Settings {
     file_explorer_background_color: u32,
     file_explorer_transition_animation: u32,
     file_explorer_custom_scrollbar_enabled: bool,
+    file_explorer_smooth_scroll_enabled: bool,
     start_menu_opacity: u32,
     start_menu_hide_recommended: bool,
     start_menu_background_color_enabled: bool,
@@ -103,6 +104,7 @@ impl Default for Settings {
             file_explorer_background_color: 0xFF000000,
             file_explorer_transition_animation: 1,
             file_explorer_custom_scrollbar_enabled: true,
+            file_explorer_smooth_scroll_enabled: false,
             start_menu_opacity: 100,
             start_menu_hide_recommended: false,
             start_menu_background_color_enabled: false,
@@ -445,6 +447,7 @@ fn parse_settings(payload: &[u8]) -> Result<Settings, String> {
         )?,
         start_menu_three_panel_layout_enabled: read_bool(&mut reader)?,
         start_menu_three_panel_hide_all_apps: read_bool(&mut reader)?,
+        file_explorer_smooth_scroll_enabled: read_bool(&mut reader)?,
         ..Settings::default()
     };
     reader.finish().map_err(|error| error.to_string())?;
@@ -696,6 +699,10 @@ fn encode_customization(request: CustomizationRequest) -> Result<Vec<u8>, String
         }
         "explorerCustomScrollbarEnabled" => {
             payload.push(16);
+            payload.push(u8::from(validated_boolean(request)?));
+        }
+        "explorerSmoothScrollEnabled" => {
+            payload.push(20);
             payload.push(u8::from(validated_boolean(request)?));
         }
         "startThreePanelLayoutEnabled" => {
@@ -1308,6 +1315,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(payload, vec![17, 1]);
+    }
+
+    #[test]
+    fn encodes_and_validates_smooth_scroll_toggle() {
+        for enabled in [false, true] {
+            let payload = encode_customization(CustomizationRequest {
+                id: "explorerSmoothScrollEnabled".into(),
+                text_value: None,
+                integer_value: None,
+                boolean_value: Some(enabled),
+            })
+            .unwrap();
+            assert_eq!(payload, vec![20, u8::from(enabled)]);
+        }
+        assert!(
+            encode_customization(CustomizationRequest {
+                id: "explorerSmoothScrollEnabled".into(),
+                text_value: None,
+                integer_value: Some(1),
+                boolean_value: None,
+            })
+            .is_err()
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@
 namespace metaplasia::protocol {
 
 inline constexpr std::uint32_t kFrameMagic = 0x504D544D;  // "MTMP"
-inline constexpr std::uint16_t kProtocolVersion = 10;
+inline constexpr std::uint16_t kProtocolVersion = 11;
 inline constexpr std::size_t kFrameHeaderSize = 16;
 inline constexpr std::uint32_t kMaximumPayloadSize = 64U * 1024U;
 
@@ -82,6 +82,7 @@ enum class CustomizationId : std::uint8_t {
     taskbar_capsule_enabled = 17,
     start_menu_three_panel_layout_enabled = 18,
     start_menu_hide_all_apps = 19,
+    file_explorer_smooth_scroll_enabled = 20,
 };
 
 struct CustomizationSettings final {
@@ -108,6 +109,7 @@ struct CustomizationSettings final {
     std::uint32_t start_menu_background_color{kDefaultShellBackgroundColor};
     bool start_menu_three_panel_layout_enabled{false};
     bool start_menu_hide_all_apps{false};
+    bool file_explorer_smooth_scroll_enabled{false};
 };
 
 // Only the value selected by `customization` is encoded. Text customizations
